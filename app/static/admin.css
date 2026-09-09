@@ -180,3 +180,34 @@ button {
   grid-template-columns: 1fr auto;
   align-items: center;
 }
+
+.ref-doc-card .hint-block,
+.ref-doc-card .muted {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.ref-doc-status {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #f0f7f3;
+  border: 1px solid #d5e8dc;
+}
+
+.ref-doc-actions {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.upload-form {
+  margin-top: 8px;
+  margin-bottom: 20px;
+}
+
+.ref-settings-form {
+  margin-top: 8px;
+}

@@ -3,15 +3,17 @@ import re
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import Cookie, Depends, FastAPI, Form, HTTPException, Request, Response
+from fastapi import Cookie, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
-from app import store
+from app import ref_doc, store
 from app.auth import SESSION_COOKIE, create_session_token, require_admin, verify_password
+from app.gemini_cache import delete_explicit_cache, try_create_explicit_cache
+from app.prompts import SYSTEM_PROMPT_MCQ
 from app.providers import gemini, groq
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -67,6 +69,48 @@ def _normalize_model(model_id: str | None, allowed: list[dict], fallback: str) -
     return fallback
 
 
+def _ref_settings(config: dict) -> dict:
+    return config.get("ref_doc_settings") or {
+        "max_inject_tokens_gemini": 3500,
+        "max_inject_tokens_groq": 1500,
+        "max_inject_tokens_vision": 1200,
+    }
+
+
+def _build_ref_excerpt(provider: str, question_text: str, config: dict, *, vision: bool = False) -> str:
+    settings = _ref_settings(config)
+    if vision:
+        max_tokens = settings.get("max_inject_tokens_vision", 1200)
+    elif provider == "groq":
+        max_tokens = settings.get("max_inject_tokens_groq", 1500)
+    else:
+        max_tokens = settings.get("max_inject_tokens_gemini", 3500)
+    return ref_doc.retrieve_excerpt(question_text, max_tokens=max_tokens)
+
+
+async def _refresh_gemini_cache(config: dict, model: str) -> None:
+    keys = config.get("gemini_keys", [])
+    if not keys:
+        return
+    meta = ref_doc.load_meta()
+    if not meta or not meta.get("enabled"):
+        return
+
+    ref_text = ref_doc.full_ref_text_for_cache()
+    if not ref_text:
+        return
+
+    old_cache = meta.get("gemini_cache_name")
+    if old_cache:
+        await delete_explicit_cache(keys[0], old_cache)
+
+    created = await try_create_explicit_cache(keys[0], model, SYSTEM_PROMPT_MCQ, ref_text)
+    if created:
+        ref_doc.update_cache_meta(created["name"], model, created["expires_at"], "explicit")
+    else:
+        ref_doc.update_cache_meta(None, None, None, "implicit")
+
+
 @app.on_event("startup")
 def startup() -> None:
     store.ensure_config()
@@ -97,7 +141,8 @@ async def analyze_text(payload: TextAnalyzeRequest) -> JSONResponse:
                 config.get("groq_text_models", []),
                 config.get("defaults", {}).get("groq_text", "openai/gpt-oss-120b"),
             )
-            result = await groq.call_groq_text(keys, model, payload.question_text, text_mode)
+            ref_excerpt = _build_ref_excerpt("groq", payload.question_text, config)
+            result = await groq.call_groq_text(keys, model, payload.question_text, text_mode, ref_excerpt)
         else:
             keys = config.get("gemini_keys", [])
             if not keys:
@@ -107,7 +152,8 @@ async def analyze_text(payload: TextAnalyzeRequest) -> JSONResponse:
                 config.get("gemini_text_models", []),
                 config.get("defaults", {}).get("gemini_text", "gemini-3.1-pro-preview"),
             )
-            result = await gemini.call_gemini_text(keys, model, payload.question_text, text_mode)
+            ref_excerpt = _build_ref_excerpt("gemini", payload.question_text, config)
+            result = await gemini.call_gemini_text(keys, model, payload.question_text, text_mode, ref_excerpt)
 
         return JSONResponse(result)
     except HTTPException:
@@ -130,7 +176,10 @@ async def analyze_vision(payload: VisionAnalyzeRequest) -> JSONResponse:
     )
 
     try:
-        result = await gemini.call_gemini_vision(keys, model, payload.image_base64, payload.mime_type)
+        ref_excerpt = _build_ref_excerpt("gemini", "", config, vision=True)
+        result = await gemini.call_gemini_vision(
+            keys, model, payload.image_base64, payload.mime_type, ref_excerpt
+        )
         return JSONResponse(result)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -261,6 +310,65 @@ async def admin_remove_model(
         store.remove_model(provider, model_type, model_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return RedirectResponse(url="/admin", status_code=303)
+
+
+@app.post("/admin/ref-doc/upload")
+async def admin_upload_ref_doc(
+    file: UploadFile = File(...),
+    _: Annotated[None, Depends(require_admin)] = None,
+):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Missing filename.")
+    raw = await file.read()
+    try:
+        meta = ref_doc.save_ref_doc(file.filename, raw, enabled=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    config = store.load_config()
+    model = config.get("defaults", {}).get("gemini_text", "gemini-3.1-pro-preview")
+    await _refresh_gemini_cache(config, model)
+    return RedirectResponse(url="/admin", status_code=303)
+
+
+@app.post("/admin/ref-doc/toggle")
+async def admin_toggle_ref_doc(
+    enabled: Annotated[str, Form()],
+    _: Annotated[None, Depends(require_admin)] = None,
+):
+    try:
+        ref_doc.set_enabled(enabled.lower() in {"1", "true", "on", "yes"})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return RedirectResponse(url="/admin", status_code=303)
+
+
+@app.post("/admin/ref-doc/remove")
+async def admin_remove_ref_doc(_: Annotated[None, Depends(require_admin)] = None):
+    config = store.load_config()
+    meta = ref_doc.load_meta()
+    keys = config.get("gemini_keys", [])
+    if meta and keys:
+        await delete_explicit_cache(keys[0], meta.get("gemini_cache_name"))
+    ref_doc.clear_ref_doc()
+    return RedirectResponse(url="/admin", status_code=303)
+
+
+@app.post("/admin/ref-doc/settings")
+async def admin_ref_doc_settings(
+    max_inject_tokens_gemini: Annotated[int, Form()],
+    max_inject_tokens_groq: Annotated[int, Form()],
+    max_inject_tokens_vision: Annotated[int, Form()],
+    _: Annotated[None, Depends(require_admin)] = None,
+):
+    store.update_ref_doc_settings(
+        {
+            "max_inject_tokens_gemini": max_inject_tokens_gemini,
+            "max_inject_tokens_groq": max_inject_tokens_groq,
+            "max_inject_tokens_vision": max_inject_tokens_vision,
+        }
+    )
     return RedirectResponse(url="/admin", status_code=303)
 
 

@@ -6,8 +6,31 @@ FastAPI backend for the Mendeley Web Importer extension. Hosts API keys, model l
 
 - Text and vision analysis endpoints for the extension
 - API key pool with automatic rotation on rate limits
-- Admin web UI at `/admin` for keys, models, and defaults
+- **Reference document upload** with smart chunk retrieval (free-tier safe)
+- Gemini implicit/explicit context caching when available
+- Admin web UI at `/admin` for keys, models, ref docs, and defaults
 - Railway-ready deployment
+
+## Reference document architecture (free tier)
+
+Free APIs have large *context windows* but small *tokens-per-minute* budgets. Sending a full PDF on every question will hit Groq/Gemini rate limits quickly.
+
+This server uses a **retrieve-then-inject** pattern:
+
+1. Upload `.txt`, `.md`, or `.pdf` in `/admin`
+2. Server chunks the document locally (no embedding API cost)
+3. For each question, keyword overlap picks the top 2–3 relevant chunks
+4. Only those chunks are injected, within per-provider token budgets:
+   - **Gemini**: ~3500 tokens (tuned for implicit cache prefix ≥4096 when stable)
+   - **Groq**: ~1500 tokens (fits inside ~8K TPM on `openai/gpt-oss-120b`)
+   - **Vision**: ~1200 tokens in the system prompt
+
+**Gemini caching strategy**
+
+- **Implicit cache** (default): same reference prefix at the start of prompts; automatic on Gemini 2.5+/3.x when prefix ≥4096 tokens and requests are close together ([docs](https://ai.google.dev/gemini-api/docs/caching))
+- **Explicit cache** (best-effort on upload): tries `cachedContents.create`; often blocked on free tier (`limit=0`) and falls back to implicit/stable-prefix mode
+
+**Groq limits** (official): `openai/gpt-oss-120b` ≈ 30 RPM, 8K TPM, 200K TPD — keep injected context small ([Groq rate limits](https://console.groq.com/docs/rate-limits))
 
 ## Local setup
 

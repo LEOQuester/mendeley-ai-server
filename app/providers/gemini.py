@@ -3,6 +3,8 @@ from typing import Any
 
 import httpx
 
+from app import ref_doc
+from app.gemini_cache import cache_is_valid
 from app.prompts import (
     API_TEST_PROMPT,
     SYSTEM_PROMPT_DESCRIPTIVE,
@@ -157,13 +159,20 @@ def _build_gemini_vision_request_body(
     base64_image: str,
     mime_type: str,
     variant: dict[str, Any],
+    ref_excerpt: str = "",
 ) -> dict[str, Any]:
+    system_text = VISION_SYSTEM_PROMPT
+    if ref_excerpt and not variant["system_in_user"]:
+        system_text = f"{VISION_SYSTEM_PROMPT}\n\n{ref_excerpt}"
+
     body: dict[str, Any] = {
         "contents": _build_gemini_vision_contents(base64_image, mime_type, variant),
         "generationConfig": _build_gemini_vision_generation_config(model, variant["schema"]),
     }
-    if not variant["system_in_user"]:
-        body["systemInstruction"] = {"parts": [{"text": VISION_SYSTEM_PROMPT}]}
+    if variant["system_in_user"] and ref_excerpt:
+        body["contents"][0]["parts"].insert(0, {"text": ref_excerpt})
+    elif not variant["system_in_user"]:
+        body["systemInstruction"] = {"parts": [{"text": system_text}]}
     return body
 
 
@@ -176,13 +185,32 @@ async def _post_gemini(model: str, api_key: str, body: dict[str, Any], timeout: 
     return response.json()
 
 
-async def request_gemini_text(api_key: str, model: str, question_text: str, text_mode: str) -> dict[str, str]:
+def _compose_user_text(question_text: str, ref_excerpt: str) -> str:
+    if ref_excerpt:
+        return f"{ref_excerpt}\n\n{TEXT_ONLY_PREAMBLE}{question_text}"
+    return f"{TEXT_ONLY_PREAMBLE}{question_text}"
+
+
+async def request_gemini_text(
+    api_key: str,
+    model: str,
+    question_text: str,
+    text_mode: str,
+    ref_excerpt: str = "",
+) -> dict[str, str]:
     system_prompt = SYSTEM_PROMPT_MCQ if text_mode == "mcq" else SYSTEM_PROMPT_DESCRIPTIVE
-    body = {
-        "systemInstruction": {"parts": [{"text": system_prompt}]},
-        "contents": [{"parts": [{"text": f"{TEXT_ONLY_PREAMBLE}{question_text}"}]}],
+    meta = ref_doc.load_meta()
+    body: dict[str, Any] = {
         "generationConfig": _build_gemini_text_generation_config(model, text_mode),
     }
+
+    if cache_is_valid(meta, model):
+        body["cachedContent"] = meta["gemini_cache_name"]
+        body["contents"] = [{"parts": [{"text": f"{TEXT_ONLY_PREAMBLE}{question_text}"}]}]
+    else:
+        body["systemInstruction"] = {"parts": [{"text": system_prompt}]}
+        body["contents"] = [{"parts": [{"text": _compose_user_text(question_text, ref_excerpt)}]}]
+
     data = await _post_gemini(model, api_key, body, TEXT_FETCH_TIMEOUT)
     text = _get_gemini_response_text(data)
     if not text:
@@ -193,7 +221,13 @@ async def request_gemini_text(api_key: str, model: str, question_text: str, text
     return parse_ai_response(text)
 
 
-async def call_gemini_text(keys: list[str], model: str, question_text: str, text_mode: str) -> dict[str, str]:
+async def call_gemini_text(
+    keys: list[str],
+    model: str,
+    question_text: str,
+    text_mode: str,
+    ref_excerpt: str = "",
+) -> dict[str, str]:
     models = [model] + [item for item in GEMINI_TEXT_OVERLOAD_FALLBACKS if item != model]
     last_error: Exception | None = None
 
@@ -202,7 +236,9 @@ async def call_gemini_text(keys: list[str], model: str, question_text: str, text
             try:
                 return await retry_with_rotation_async(
                     keys,
-                    lambda key, current=current_model: request_gemini_text(key, current, question_text, text_mode),
+                    lambda key, current=current_model: request_gemini_text(
+                        key, current, question_text, text_mode, ref_excerpt
+                    ),
                 )
             except Exception as exc:
                 last_error = exc
@@ -224,8 +260,9 @@ async def request_gemini_vision_once(
     base64_image: str,
     mime_type: str,
     variant: dict[str, Any],
+    ref_excerpt: str = "",
 ) -> dict[str, str]:
-    body = _build_gemini_vision_request_body(model, base64_image, mime_type, variant)
+    body = _build_gemini_vision_request_body(model, base64_image, mime_type, variant, ref_excerpt)
     data = await _post_gemini(model, api_key, body, VISION_FETCH_TIMEOUT)
     text = _get_gemini_response_text(data)
     if not text:
@@ -242,11 +279,14 @@ async def request_gemini_vision(
     model: str,
     base64_image: str,
     mime_type: str,
+    ref_excerpt: str = "",
 ) -> dict[str, str]:
     last_error: Exception | None = None
     for variant in VISION_REQUEST_VARIANTS:
         try:
-            return await request_gemini_vision_once(api_key, model, base64_image, mime_type, variant)
+            return await request_gemini_vision_once(
+                api_key, model, base64_image, mime_type, variant, ref_excerpt
+            )
         except Exception as exc:
             last_error = exc
             message = str(exc)
@@ -261,6 +301,7 @@ async def call_gemini_vision(
     model: str,
     base64_image: str,
     mime_type: str,
+    ref_excerpt: str = "",
 ) -> dict[str, str]:
     preferred = ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash"]
     models = [model] + [item for item in preferred if item != model][:2]
@@ -270,7 +311,9 @@ async def call_gemini_vision(
         try:
             return await retry_with_rotation_async(
                 keys,
-                lambda key, current=current_model: request_gemini_vision(key, current, base64_image, mime_type),
+                lambda key, current=current_model: request_gemini_vision(
+                    key, current, base64_image, mime_type, ref_excerpt
+                ),
                 max_keys=3,
             )
         except Exception as exc:

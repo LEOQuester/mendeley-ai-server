@@ -39,12 +39,19 @@ def _is_image_refusal_text(text: str) -> bool:
     )
 
 
+def _compose_groq_user_content(question_text: str, ref_excerpt: str) -> str:
+    if ref_excerpt:
+        return f"{ref_excerpt}\n\n{TEXT_ONLY_PREAMBLE}{question_text}"
+    return f"{TEXT_ONLY_PREAMBLE}{question_text}"
+
+
 async def request_groq_text(
     api_key: str,
     model: str,
     question_text: str,
     text_mode: str,
     allow_retry: bool = True,
+    ref_excerpt: str = "",
 ) -> dict[str, str]:
     system_prompt = SYSTEM_PROMPT_MCQ if text_mode == "mcq" else SYSTEM_PROMPT_DESCRIPTIVE
     max_tokens = 4096 if text_mode == "mcq" else 6144
@@ -52,7 +59,7 @@ async def request_groq_text(
         "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"{TEXT_ONLY_PREAMBLE}{question_text}"},
+            {"role": "user", "content": _compose_groq_user_content(question_text, ref_excerpt)},
         ],
         "response_format": {"type": "json_object"},
         "temperature": 0,
@@ -74,7 +81,9 @@ async def request_groq_text(
     if not response.is_success:
         detail = _extract_provider_error_message(response.text)
         if allow_retry and (response.status_code == 400 or _is_image_refusal_text(detail)):
-            return await request_groq_text(api_key, model, question_text, text_mode, allow_retry=False)
+            return await request_groq_text(
+                api_key, model, question_text, text_mode, allow_retry=False, ref_excerpt=ref_excerpt
+            )
         _raise_http_error("Groq text error", response.status_code, response.text)
 
     data = response.json()
@@ -83,14 +92,22 @@ async def request_groq_text(
         raise ProviderError("Empty response from Groq")
     parsed = parse_ai_response(text)
     if allow_retry and _is_image_refusal_text(parsed.get("answer", "")):
-        return await request_groq_text(api_key, model, question_text, text_mode, allow_retry=False)
+        return await request_groq_text(
+            api_key, model, question_text, text_mode, allow_retry=False, ref_excerpt=ref_excerpt
+        )
     return parsed
 
 
-async def call_groq_text(keys: list[str], model: str, question_text: str, text_mode: str) -> dict[str, str]:
+async def call_groq_text(
+    keys: list[str],
+    model: str,
+    question_text: str,
+    text_mode: str,
+    ref_excerpt: str = "",
+) -> dict[str, str]:
     return await retry_with_rotation_async(
         keys,
-        lambda key: request_groq_text(key, model, question_text, text_mode),
+        lambda key: request_groq_text(key, model, question_text, text_mode, ref_excerpt=ref_excerpt),
     )
 
 

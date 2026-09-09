@@ -34,6 +34,58 @@
     </section>
     {% else %}
 
+    <section class="card ref-doc-card">
+      <h2>Reference Document</h2>
+      <p class="hint-block">
+        Upload a syllabus, study guide, or notes file. The server retrieves only the most relevant
+        sections per question to stay inside free-tier token limits. Gemini uses implicit/explicit
+        caching when possible; Groq gets a smaller excerpt.
+      </p>
+
+      {% if config.ref_doc %}
+      <div class="ref-doc-status">
+        <p><strong>{{ config.ref_doc.original_name }}</strong></p>
+        <p>{{ config.ref_doc.chunk_count }} chunks · ~{{ config.ref_doc.token_estimate }} tokens · cache: {{ config.ref_doc.gemini_cache_mode }}</p>
+        <p class="muted">Uploaded {{ config.ref_doc.uploaded_at }}</p>
+      </div>
+      <div class="ref-doc-actions">
+        <form method="post" action="/admin/ref-doc/toggle" class="inline-form">
+          <input type="hidden" name="enabled" value="{{ 'false' if config.ref_doc.enabled else 'true' }}">
+          <button type="submit" class="btn-secondary">{{ 'Disable' if config.ref_doc.enabled else 'Enable' }}</button>
+        </form>
+        <form method="post" action="/admin/ref-doc/remove" onsubmit="return confirm('Remove reference document?');">
+          <button type="submit" class="btn-danger">Remove document</button>
+        </form>
+      </div>
+      {% else %}
+      <p class="muted">No reference document uploaded yet.</p>
+      {% endif %}
+
+      <form method="post" action="/admin/ref-doc/upload" enctype="multipart/form-data" class="stack upload-form">
+        <label>
+          <span>Upload .txt, .md, or .pdf (max 5 MB)</span>
+          <input type="file" name="file" accept=".txt,.md,.markdown,.pdf,.csv" required>
+        </label>
+        <button type="submit" class="btn-primary">Upload reference document</button>
+      </form>
+
+      <form method="post" action="/admin/ref-doc/settings" class="defaults-form ref-settings-form">
+        <label>
+          <span>Gemini inject budget (tokens)</span>
+          <input type="number" name="max_inject_tokens_gemini" min="500" max="8000" value="{{ config.ref_doc_settings.max_inject_tokens_gemini }}">
+        </label>
+        <label>
+          <span>Groq inject budget (tokens)</span>
+          <input type="number" name="max_inject_tokens_groq" min="300" max="4000" value="{{ config.ref_doc_settings.max_inject_tokens_groq }}">
+        </label>
+        <label>
+          <span>Vision inject budget (tokens)</span>
+          <input type="number" name="max_inject_tokens_vision" min="300" max="3000" value="{{ config.ref_doc_settings.max_inject_tokens_vision }}">
+        </label>
+        <button type="submit" class="btn-primary">Save ref-doc budgets</button>
+      </form>
+    </section>
+
     <section class="grid">
       <article class="card">
         <h2>Gemini API Keys</h2>

@@ -25,5 +25,10 @@
     "gemini_text": "gemini-3.1-pro-preview",
     "gemini_vision": "gemini-3.7-flash",
     "groq_text": "openai/gpt-oss-120b"
+  },
+  "ref_doc_settings": {
+    "max_inject_tokens_gemini": 3500,
+    "max_inject_tokens_groq": 1500,
+    "max_inject_tokens_vision": 1200
   }
 }

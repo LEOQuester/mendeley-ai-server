@@ -36,6 +36,11 @@ def _default_config() -> dict[str, Any]:
             "gemini_vision": "gemini-3.7-flash",
             "groq_text": "openai/gpt-oss-120b",
         },
+        "ref_doc_settings": {
+            "max_inject_tokens_gemini": 3500,
+            "max_inject_tokens_groq": 1500,
+            "max_inject_tokens_vision": 1200,
+        },
     }
 
 
@@ -79,13 +84,41 @@ def public_config() -> dict[str, Any]:
         "defaults": config.get("defaults", {}),
         "has_gemini_keys": bool(config.get("gemini_keys")),
         "has_groq_keys": bool(config.get("groq_keys")),
+        "ref_doc": _public_ref_doc_summary(),
+    }
+
+
+def _public_ref_doc_summary() -> dict[str, Any]:
+    from app import ref_doc
+
+    summary = ref_doc.admin_summary()
+    if not summary:
+        return {"enabled": False, "loaded": False}
+    return {
+        "enabled": summary.get("enabled", False),
+        "loaded": True,
+        "original_name": summary.get("original_name"),
+        "token_estimate": summary.get("token_estimate", 0),
+        "chunk_count": summary.get("chunk_count", 0),
+        "gemini_cache_mode": summary.get("gemini_cache_mode", "none"),
     }
 
 
 def admin_config() -> dict[str, Any]:
+    from app import ref_doc
+
     config = deepcopy(load_config())
     config["gemini_keys"] = _mask_keys(config.get("gemini_keys", []))
     config["groq_keys"] = _mask_keys(config.get("groq_keys", []))
+    config["ref_doc"] = ref_doc.admin_summary()
+    config.setdefault(
+        "ref_doc_settings",
+        {
+            "max_inject_tokens_gemini": 3500,
+            "max_inject_tokens_groq": 1500,
+            "max_inject_tokens_vision": 1200,
+        },
+    )
     return config
 
 
@@ -166,4 +199,13 @@ def update_defaults(defaults: dict[str, str]) -> None:
     for key in ("gemini_text", "gemini_vision", "groq_text"):
         if key in defaults and defaults[key]:
             current[key] = defaults[key]
+    save_config(config)
+
+
+def update_ref_doc_settings(settings: dict[str, int]) -> None:
+    config = load_config()
+    current = config.setdefault("ref_doc_settings", {})
+    for key in ("max_inject_tokens_gemini", "max_inject_tokens_groq", "max_inject_tokens_vision"):
+        if key in settings and settings[key] > 0:
+            current[key] = int(settings[key])
     save_config(config)
