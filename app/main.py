@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 from pathlib import Path
@@ -17,6 +18,8 @@ from app.prompts import SYSTEM_PROMPT_MCQ
 from app.providers import gemini, groq
 
 BASE_DIR = Path(__file__).resolve().parent
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Mendeley AI Server", version="1.0.0")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -91,6 +94,7 @@ def _build_ref_excerpt(provider: str, question_text: str, config: dict, *, visio
 async def _refresh_gemini_cache(config: dict, model: str) -> None:
     keys = config.get("gemini_keys", [])
     if not keys:
+        ref_doc.update_cache_meta(None, None, None, "none")
         return
     meta = ref_doc.load_meta()
     if not meta or not meta.get("enabled"):
@@ -100,14 +104,18 @@ async def _refresh_gemini_cache(config: dict, model: str) -> None:
     if not ref_text:
         return
 
-    old_cache = meta.get("gemini_cache_name")
-    if old_cache:
-        await delete_explicit_cache(keys[0], old_cache)
+    try:
+        old_cache = meta.get("gemini_cache_name")
+        if old_cache:
+            await delete_explicit_cache(keys[0], old_cache)
 
-    created = await try_create_explicit_cache(keys[0], model, SYSTEM_PROMPT_MCQ, ref_text)
-    if created:
-        ref_doc.update_cache_meta(created["name"], model, created["expires_at"], "explicit")
-    else:
+        created = await try_create_explicit_cache(keys[0], model, SYSTEM_PROMPT_MCQ, ref_text)
+        if created:
+            ref_doc.update_cache_meta(created["name"], model, created["expires_at"], "explicit")
+        else:
+            ref_doc.update_cache_meta(None, None, None, "implicit")
+    except Exception as exc:
+        logger.warning("Gemini cache refresh skipped after ref-doc upload: %s", exc)
         ref_doc.update_cache_meta(None, None, None, "implicit")
 
 
@@ -325,15 +333,28 @@ async def admin_upload_ref_doc(
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename.")
-    raw = await file.read()
     try:
+        raw = await file.read()
         meta = ref_doc.save_ref_doc(file.filename, raw, enabled=True)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        logger.exception("Failed to write reference document to disk")
+        raise HTTPException(
+            status_code=500,
+            detail="Server could not save the uploaded file. Check Railway disk/volume settings.",
+        ) from exc
+    except Exception as exc:
+        logger.exception("Unexpected ref-doc upload failure")
+        raise HTTPException(status_code=500, detail=f"Upload failed: {exc}") from exc
 
-    config = store.load_config()
-    model = config.get("defaults", {}).get("gemini_text", "gemini-3.1-pro-preview")
-    await _refresh_gemini_cache(config, model)
+    try:
+        config = store.load_config()
+        model = config.get("defaults", {}).get("gemini_text", "gemini-3.1-pro-preview")
+        await _refresh_gemini_cache(config, model)
+    except Exception as exc:
+        logger.warning("Ref doc saved but cache refresh failed: %s", exc)
+
     return RedirectResponse(url="/admin", status_code=303)
 
 

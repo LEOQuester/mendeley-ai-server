@@ -85,6 +85,10 @@ def _extract_text(filename: str, raw: bytes) -> str:
             raise ValueError("Could not extract text from PDF. Try a .txt or .md export.")
         except ImportError as exc:
             raise ValueError("PDF support requires pypdf. Upload .txt or .md instead.") from exc
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError(f"PDF could not be read: {exc}") from exc
 
     raise ValueError("Unsupported file type. Upload .txt, .md, or .pdf.")
 

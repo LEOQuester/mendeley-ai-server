@@ -54,7 +54,7 @@ async def try_create_explicit_cache(
     message = response.text
     if _is_free_tier_cache_block(message):
         return None
-    if response.status_code in {400, 403, 429}:
+    if response.status_code in {400, 403, 429, 500, 502, 503, 504}:
         return None
     raise CacheError(f"Gemini cache create failed ({response.status_code}): {message[:220]}")
 
@@ -63,8 +63,11 @@ async def delete_explicit_cache(api_key: str, cache_name: str | None) -> None:
     if not cache_name:
         return
     url = f"https://generativelanguage.googleapis.com/v1beta/{cache_name}?key={api_key}"
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        await client.delete(url)
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            await client.delete(url)
+    except Exception:
+        return
 
 
 def cache_is_valid(meta: dict[str, Any] | None, model: str) -> bool:
