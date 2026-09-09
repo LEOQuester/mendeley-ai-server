@@ -116,6 +116,11 @@ def startup() -> None:
     store.ensure_config()
 
 
+@app.get("/")
+async def root():
+    return RedirectResponse(url="/admin", status_code=302)
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
