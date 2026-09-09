@@ -20,15 +20,17 @@ This server uses a **retrieve-then-inject** pattern:
 1. Upload `.txt`, `.md`, or `.pdf` in `/admin`
 2. Server chunks the document locally (no embedding API cost)
 3. For each question, keyword overlap picks the top 2–3 relevant chunks
-4. Only those chunks are injected, within per-provider token budgets:
-   - **Gemini**: ~3500 tokens (tuned for implicit cache prefix ≥4096 when stable)
-   - **Groq**: ~1500 tokens (fits inside ~8K TPM on `openai/gpt-oss-120b`)
-   - **Vision**: ~1200 tokens in the system prompt
+4. Token estimates use **~1.35 tokens/word** (typical Gemini count). A char/4 upper bound is stored for comparison.
+5. Per-question injection depends on cache mode:
+   - **Explicit cache**: question only (full doc cached on upload)
+   - **Implicit cache**: stable ~4.5K-token doc prefix + relevant excerpt (~5K total budget)
+   - **Groq / vision**: excerpt only (~1.8K / ~1.5K tokens)
 
 **Gemini caching strategy**
 
-- **Implicit cache** (default): same reference prefix at the start of prompts; automatic on Gemini 2.5+/3.x when prefix ≥4096 tokens and requests are close together ([docs](https://ai.google.dev/gemini-api/docs/caching))
-- **Explicit cache** (best-effort on upload): tries `cachedContents.create`; often blocked on free tier (`limit=0`) and falls back to implicit/stable-prefix mode
+- **Explicit cache** (tried on upload): needs ≥4,096 tokens on Gemini 3 models. Free tier often returns `limit=0` → automatic fallback.
+- **Implicit cache** (fallback): on 400/429/`INVALID_ARGUMENT`/free-tier block, server sends the same stable doc prefix (≥4,096 tokens) on every Gemini request so Google can cache it automatically ([docs](https://ai.google.dev/gemini-api/docs/caching)).
+- Never fails the upload — always downgrades gracefully with a note shown in admin.
 
 **Groq limits** (official): `openai/gpt-oss-120b` ≈ 30 RPM, 8K TPM, 200K TPD — keep injected context small ([Groq rate limits](https://console.groq.com/docs/rate-limits))
 

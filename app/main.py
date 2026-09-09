@@ -11,11 +11,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
-from app import ref_doc, store
+from app import chat_sessions, ref_doc, store
 from app.auth import SESSION_COOKIE, create_session_token, require_admin, verify_password
-from app.gemini_cache import cache_is_valid, delete_explicit_cache, try_create_explicit_cache
-from app.prompts import SYSTEM_PROMPT_MCQ
+from app.gemini_cache import delete_explicit_cache, refresh_gemini_cache_for_doc
 from app.providers import gemini, groq
+from app.ref_strategy import gemini_uses_explicit_cache, resolve_ref_inject
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -43,12 +43,18 @@ class TextAnalyzeRequest(BaseModel):
     question_text: str = Field(min_length=1)
     mode: Literal["auto", "mcq", "descriptive"] = "auto"
     model: str | None = None
+    session_id: str | None = None
 
 
 class VisionAnalyzeRequest(BaseModel):
     image_base64: str = Field(min_length=1)
     mime_type: str = "image/jpeg"
     model: str | None = None
+    session_id: str | None = None
+
+
+class SessionResetRequest(BaseModel):
+    session_id: str | None = None
 
 
 class TestKeyRequest(BaseModel):
@@ -72,46 +78,21 @@ def _normalize_model(model_id: str | None, allowed: list[dict], fallback: str) -
     return fallback
 
 
-def _ref_settings(config: dict) -> dict:
-    return config.get("ref_doc_settings") or {
-        "max_inject_tokens_gemini": 3500,
-        "max_inject_tokens_groq": 1500,
-        "max_inject_tokens_vision": 1200,
-    }
-
-
-def _build_ref_context(
-    provider: str,
-    question_text: str,
-    config: dict,
-    *,
-    vision: bool = False,
-    gemini_model: str | None = None,
-) -> str:
+def _ref_mode(provider: str, model: str, ref_context: str) -> str:
     meta = ref_doc.load_meta()
     if not meta or not meta.get("enabled"):
-        return ""
-
-    # Gemini text: send the FULL document so implicit/explicit caching can apply.
-    # Explicit cache already stores the doc — nothing extra to inject.
-    if provider == "gemini" and not vision:
-        if gemini_model and cache_is_valid(meta, gemini_model):
-            return ""
-        return ref_doc.full_ref_context()
-
-    # Groq + vision: free-tier TPM limits — retrieve only relevant sections (RAG-lite).
-    settings = _ref_settings(config)
-    if vision:
-        max_tokens = settings.get("max_inject_tokens_vision", 1200)
-    else:
-        max_tokens = settings.get("max_inject_tokens_groq", 1500)
-    return ref_doc.retrieve_excerpt(question_text, max_tokens=max_tokens)
+        return "none"
+    if provider == "gemini" and gemini_uses_explicit_cache(model):
+        return "cache"
+    if ref_context:
+        return "excerpt"
+    return "none"
 
 
 async def _refresh_gemini_cache(config: dict, model: str) -> None:
     keys = config.get("gemini_keys", [])
     if not keys:
-        ref_doc.update_cache_meta(None, None, None, "none")
+        ref_doc.update_cache_meta(None, None, None, "none", "No Gemini API keys configured.")
         return
     meta = ref_doc.load_meta()
     if not meta or not meta.get("enabled"):
@@ -122,18 +103,26 @@ async def _refresh_gemini_cache(config: dict, model: str) -> None:
         return
 
     try:
-        old_cache = meta.get("gemini_cache_name")
-        if old_cache:
-            await delete_explicit_cache(keys[0], old_cache)
-
-        created = await try_create_explicit_cache(keys[0], model, SYSTEM_PROMPT_MCQ, ref_text)
-        if created:
-            ref_doc.update_cache_meta(created["name"], model, created["expires_at"], "explicit")
+        result = await refresh_gemini_cache_for_doc(keys[0], model, ref_text)
+        if result.cache:
+            ref_doc.update_cache_meta(
+                result.cache["name"],
+                model,
+                result.cache["expires_at"],
+                result.mode,
+                result.note,
+            )
         else:
-            ref_doc.update_cache_meta(None, None, None, "implicit")
+            ref_doc.update_cache_meta(None, None, None, result.mode, result.note)
     except Exception as exc:
         logger.warning("Gemini cache refresh skipped after ref-doc upload: %s", exc)
-        ref_doc.update_cache_meta(None, None, None, "implicit")
+        ref_doc.update_cache_meta(
+            None,
+            None,
+            None,
+            "implicit",
+            f"Cache refresh failed ({exc}). Using implicit stable-prefix mode.",
+        )
 
 
 @app.on_event("startup")
@@ -171,8 +160,12 @@ async def analyze_text(payload: TextAnalyzeRequest) -> JSONResponse:
                 config.get("groq_text_models", []),
                 config.get("defaults", {}).get("groq_text", "openai/gpt-oss-120b"),
             )
-            ref_context = _build_ref_context("groq", payload.question_text, config)
-            result = await groq.call_groq_text(keys, model, payload.question_text, text_mode, ref_context)
+            session_id, session = chat_sessions.get_or_create_session(payload.session_id, model)
+            ref_context = resolve_ref_inject("groq", payload.question_text, config)
+            result = await groq.call_groq_text(
+                keys, model, payload.question_text, text_mode, ref_context,
+                session_id=session_id, session=session,
+            )
         else:
             keys = config.get("gemini_keys", [])
             if not keys:
@@ -182,12 +175,22 @@ async def analyze_text(payload: TextAnalyzeRequest) -> JSONResponse:
                 config.get("gemini_text_models", []),
                 config.get("defaults", {}).get("gemini_text", "gemini-3.1-pro-preview"),
             )
-            ref_context = _build_ref_context(
+            session_id, session = chat_sessions.get_or_create_session(payload.session_id, model)
+            ref_context = resolve_ref_inject(
                 "gemini", payload.question_text, config, gemini_model=model
             )
-            result = await gemini.call_gemini_text(keys, model, payload.question_text, text_mode, ref_context)
+            result = await gemini.call_gemini_text(
+                keys, model, payload.question_text, text_mode, ref_context,
+                session_id=session_id, session=session,
+            )
 
-        return JSONResponse(result)
+        return JSONResponse(
+            {
+                **result,
+                "session_id": session_id,
+                "ref_mode": _ref_mode(payload.provider, model, ref_context),
+            }
+        )
     except HTTPException:
         raise
     except Exception as exc:
@@ -208,13 +211,30 @@ async def analyze_vision(payload: VisionAnalyzeRequest) -> JSONResponse:
     )
 
     try:
-        ref_context = _build_ref_context("gemini", "", config, vision=True)
+        session_id, session = chat_sessions.get_or_create_session(payload.session_id, model)
+        ref_context = resolve_ref_inject("gemini", "", config, vision=True)
         result = await gemini.call_gemini_vision(
-            keys, model, payload.image_base64, payload.mime_type, ref_context
+            keys, model, payload.image_base64, payload.mime_type, ref_context,
+            session_id=session_id, session=session,
         )
-        return JSONResponse(result)
+        return JSONResponse(
+            {
+                **result,
+                "session_id": session_id,
+                "ref_mode": _ref_mode("gemini", model, ref_context),
+            }
+        )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/api/session/reset")
+async def reset_chat_session(payload: SessionResetRequest) -> JSONResponse:
+    if payload.session_id:
+        chat_sessions.delete_session(payload.session_id)
+    else:
+        chat_sessions.clear_all_sessions()
+    return JSONResponse({"ok": True})
 
 
 @app.post("/api/test-key")
@@ -368,6 +388,7 @@ async def admin_upload_ref_doc(
         raise HTTPException(status_code=500, detail=f"Upload failed: {exc}") from exc
 
     try:
+        chat_sessions.clear_all_sessions()
         config = store.load_config()
         model = config.get("defaults", {}).get("gemini_text", "gemini-3.1-pro-preview")
         await _refresh_gemini_cache(config, model)
@@ -397,6 +418,7 @@ async def admin_remove_ref_doc(_: Annotated[None, Depends(require_admin)] = None
     if meta and keys:
         await delete_explicit_cache(keys[0], meta.get("gemini_cache_name"))
     ref_doc.clear_ref_doc()
+    chat_sessions.clear_all_sessions()
     return RedirectResponse(url="/admin", status_code=303)
 
 

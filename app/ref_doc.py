@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 import threading
@@ -29,8 +30,29 @@ STOPWORDS = {
 }
 
 
+TOKENS_PER_WORD = 1.35
+IMPLICIT_CACHE_MIN_TOKENS = 4096
+
+
 def estimate_tokens(text: str) -> int:
+    """Typical Gemini token count for English academic prose (~1.35 tokens/word)."""
+    words = count_words(text)
+    if words:
+        return max(1, int(words * TOKENS_PER_WORD))
+    return max(1, len(text) // 5)
+
+
+def estimate_tokens_upper_bound(text: str) -> int:
+    """Conservative char/4 estimate — often higher than actual Gemini billing."""
     return max(1, len(text) // 4)
+
+
+def count_words(text: str) -> int:
+    return len(re.findall(r"\b\w+\b", text))
+
+
+def compute_doc_version(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
 def _tokenize(text: str) -> set[str]:
@@ -161,13 +183,17 @@ def save_ref_doc(filename: str, raw: bytes, enabled: bool = True) -> dict[str, A
             "original_name": filename,
             "stored_name": SOURCE_PATH.name,
             "char_count": len(text),
+            "word_count": count_words(text),
             "token_estimate": estimate_tokens(text),
+            "token_estimate_upper": estimate_tokens_upper_bound(text),
+            "doc_version": compute_doc_version(text),
             "chunk_count": len(chunk_records),
             "uploaded_at": datetime.now(UTC).isoformat(),
             "gemini_cache_name": None,
             "gemini_cache_model": None,
             "gemini_cache_expires_at": None,
             "gemini_cache_mode": "none",
+            "gemini_cache_note": None,
         }
         _save_meta(meta)
         return meta
@@ -182,7 +208,13 @@ def set_enabled(enabled: bool) -> dict[str, Any]:
     return meta
 
 
-def update_cache_meta(cache_name: str | None, model: str | None, expires_at: str | None, mode: str) -> None:
+def update_cache_meta(
+    cache_name: str | None,
+    model: str | None,
+    expires_at: str | None,
+    mode: str,
+    cache_note: str | None = None,
+) -> None:
     meta = load_meta()
     if not meta:
         return
@@ -190,6 +222,7 @@ def update_cache_meta(cache_name: str | None, model: str | None, expires_at: str
     meta["gemini_cache_model"] = model
     meta["gemini_cache_expires_at"] = expires_at
     meta["gemini_cache_mode"] = mode
+    meta["gemini_cache_note"] = cache_note
     _save_meta(meta)
 
 
@@ -239,12 +272,14 @@ def retrieve_excerpt(question_text: str, max_tokens: int, top_k: int = 3) -> str
 
     body = "\n\n---\n\n".join(parts)
     return (
-        "REFERENCE DOCUMENT (read before answering; prefer facts from here when relevant):\n"
+        "REFERENCE MATERIAL (check here first — if the answer is explicitly stated, use only these notes):\n"
         f"{body}\n\n---\n"
     )
 
 
 def admin_summary() -> dict[str, Any] | None:
+    from app import chat_sessions
+
     meta = load_meta()
     if not meta:
         return None
@@ -252,12 +287,48 @@ def admin_summary() -> dict[str, Any] | None:
         "enabled": meta.get("enabled", False),
         "original_name": meta.get("original_name"),
         "char_count": meta.get("char_count", 0),
+        "word_count": meta.get("word_count") or count_words(full_ref_text_for_cache()),
         "token_estimate": meta.get("token_estimate", 0),
+        "token_estimate_upper": meta.get("token_estimate_upper") or meta.get("token_estimate", 0),
+        "doc_version": meta.get("doc_version"),
         "chunk_count": meta.get("chunk_count", 0),
         "uploaded_at": meta.get("uploaded_at"),
         "gemini_cache_mode": meta.get("gemini_cache_mode", "none"),
         "gemini_cache_expires_at": meta.get("gemini_cache_expires_at"),
+        "gemini_cache_note": meta.get("gemini_cache_note"),
+        "active_sessions": chat_sessions.active_session_count(),
     }
+
+
+def stable_implicit_prefix(max_tokens: int = 4500) -> str:
+    """First sections of the doc — identical on every request for Gemini implicit caching."""
+    meta = load_meta()
+    if not meta or not meta.get("enabled"):
+        return ""
+
+    chunks = _load_chunks()
+    if not chunks:
+        return ""
+
+    header = "REFERENCE MATERIAL (stable prefix — repeated each request for implicit caching):\n"
+    budget = max(IMPLICIT_CACHE_MIN_TOKENS, max_tokens) - estimate_tokens(header)
+    parts: list[str] = []
+    used_tokens = 0
+
+    for chunk in chunks:
+        chunk_tokens = chunk.get("token_estimate") or estimate_tokens(chunk["text"])
+        if used_tokens + chunk_tokens > budget and parts:
+            break
+        parts.append(chunk["text"])
+        used_tokens += chunk_tokens
+        if used_tokens >= budget:
+            break
+
+    if not parts:
+        return ""
+
+    body = "\n\n---\n\n".join(parts)
+    return f"{header}{body}\n\n---\n"
 
 
 def full_ref_text_for_cache() -> str:
@@ -267,17 +338,3 @@ def full_ref_text_for_cache() -> str:
     return "\n\n".join(chunk["text"] for chunk in chunks)
 
 
-def full_ref_context() -> str:
-    """Return the entire reference document for Gemini context caching."""
-    meta = load_meta()
-    if not meta or not meta.get("enabled"):
-        return ""
-
-    body = full_ref_text_for_cache()
-    if not body:
-        return ""
-
-    return (
-        "REFERENCE DOCUMENT (read before answering; base your answer on this document):\n"
-        f"{body}\n\n---\n"
-    )

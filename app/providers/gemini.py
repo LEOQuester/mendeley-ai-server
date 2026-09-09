@@ -1,9 +1,10 @@
 import asyncio
+import json
 from typing import Any
 
 import httpx
 
-from app import ref_doc
+from app import chat_sessions, ref_doc
 from app.gemini_cache import cache_is_valid
 from app.prompts import (
     API_TEST_PROMPT,
@@ -197,19 +198,23 @@ async def request_gemini_text(
     question_text: str,
     text_mode: str,
     ref_excerpt: str = "",
+    session: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     system_prompt = SYSTEM_PROMPT_MCQ if text_mode == "mcq" else SYSTEM_PROMPT_DESCRIPTIVE
     meta = ref_doc.load_meta()
+    history = chat_sessions.gemini_history_contents(session) if session else []
+    user_text = f"{TEXT_ONLY_PREAMBLE}{question_text}"
     body: dict[str, Any] = {
         "generationConfig": _build_gemini_text_generation_config(model, text_mode),
     }
 
     if cache_is_valid(meta, model):
         body["cachedContent"] = meta["gemini_cache_name"]
-        body["contents"] = [{"parts": [{"text": f"{TEXT_ONLY_PREAMBLE}{question_text}"}]}]
+        body["contents"] = history + [{"role": "user", "parts": [{"text": user_text}]}]
     else:
         body["systemInstruction"] = {"parts": [{"text": system_prompt}]}
-        body["contents"] = [{"parts": [{"text": _compose_user_text(question_text, ref_excerpt)}]}]
+        composed = _compose_user_text(question_text, ref_excerpt)
+        body["contents"] = history + [{"role": "user", "parts": [{"text": composed}]}]
 
     data = await _post_gemini(model, api_key, body, TEXT_FETCH_TIMEOUT)
     text = _get_gemini_response_text(data)
@@ -227,6 +232,8 @@ async def call_gemini_text(
     question_text: str,
     text_mode: str,
     ref_excerpt: str = "",
+    session_id: str | None = None,
+    session: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     models = [model] + [item for item in GEMINI_TEXT_OVERLOAD_FALLBACKS if item != model]
     last_error: Exception | None = None
@@ -234,12 +241,15 @@ async def call_gemini_text(
     for current_model in models:
         for attempt in range(2):
             try:
-                return await retry_with_rotation_async(
+                result = await retry_with_rotation_async(
                     keys,
                     lambda key, current=current_model: request_gemini_text(
-                        key, current, question_text, text_mode, ref_excerpt
+                        key, current, question_text, text_mode, ref_excerpt, session
                     ),
                 )
+                if session_id:
+                    chat_sessions.append_turn(session_id, question_text, json.dumps(result))
+                return result
             except Exception as exc:
                 last_error = exc
                 message = str(exc)
@@ -302,6 +312,8 @@ async def call_gemini_vision(
     base64_image: str,
     mime_type: str,
     ref_excerpt: str = "",
+    session_id: str | None = None,
+    session: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     preferred = ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash"]
     models = [model] + [item for item in preferred if item != model][:2]
@@ -309,13 +321,16 @@ async def call_gemini_vision(
 
     for current_model in models:
         try:
-            return await retry_with_rotation_async(
+            result = await retry_with_rotation_async(
                 keys,
                 lambda key, current=current_model: request_gemini_vision(
                     key, current, base64_image, mime_type, ref_excerpt
                 ),
                 max_keys=3,
             )
+            if session_id:
+                chat_sessions.append_turn(session_id, "[vision screenshot]", json.dumps(result))
+            return result
         except Exception as exc:
             last_error = exc
             message = str(exc)

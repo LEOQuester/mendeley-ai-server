@@ -1,8 +1,10 @@
+import json
 import re
 from typing import Any
 
 import httpx
 
+from app import chat_sessions
 from app.prompts import API_TEST_PROMPT, SYSTEM_PROMPT_DESCRIPTIVE, SYSTEM_PROMPT_MCQ, TEXT_ONLY_PREAMBLE
 from app.providers.key_rotation import retry_with_rotation_async
 from app.providers.response_parser import parse_ai_response
@@ -52,15 +54,17 @@ async def request_groq_text(
     text_mode: str,
     allow_retry: bool = True,
     ref_excerpt: str = "",
+    session: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     system_prompt = SYSTEM_PROMPT_MCQ if text_mode == "mcq" else SYSTEM_PROMPT_DESCRIPTIVE
     max_tokens = 4096 if text_mode == "mcq" else 6144
+    messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
+    if session:
+        messages.extend(chat_sessions.groq_history_messages(session))
+    messages.append({"role": "user", "content": _compose_groq_user_content(question_text, ref_excerpt)})
     payload: dict[str, Any] = {
         "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": _compose_groq_user_content(question_text, ref_excerpt)},
-        ],
+        "messages": messages,
         "response_format": {"type": "json_object"},
         "temperature": 0,
     }
@@ -82,7 +86,7 @@ async def request_groq_text(
         detail = _extract_provider_error_message(response.text)
         if allow_retry and (response.status_code == 400 or _is_image_refusal_text(detail)):
             return await request_groq_text(
-                api_key, model, question_text, text_mode, allow_retry=False, ref_excerpt=ref_excerpt
+                api_key, model, question_text, text_mode, allow_retry=False, ref_excerpt=ref_excerpt, session=session
             )
         _raise_http_error("Groq text error", response.status_code, response.text)
 
@@ -93,7 +97,7 @@ async def request_groq_text(
     parsed = parse_ai_response(text)
     if allow_retry and _is_image_refusal_text(parsed.get("answer", "")):
         return await request_groq_text(
-            api_key, model, question_text, text_mode, allow_retry=False, ref_excerpt=ref_excerpt
+            api_key, model, question_text, text_mode, allow_retry=False, ref_excerpt=ref_excerpt, session=session
         )
     return parsed
 
@@ -104,11 +108,16 @@ async def call_groq_text(
     question_text: str,
     text_mode: str,
     ref_excerpt: str = "",
+    session_id: str | None = None,
+    session: dict[str, Any] | None = None,
 ) -> dict[str, str]:
-    return await retry_with_rotation_async(
+    result = await retry_with_rotation_async(
         keys,
-        lambda key: request_groq_text(key, model, question_text, text_mode, ref_excerpt=ref_excerpt),
+        lambda key: request_groq_text(key, model, question_text, text_mode, ref_excerpt=ref_excerpt, session=session),
     )
+    if session_id:
+        chat_sessions.append_turn(session_id, question_text, json.dumps(result))
+    return result
 
 
 async def test_groq_key(api_key: str, model: str) -> str:

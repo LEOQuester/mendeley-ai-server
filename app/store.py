@@ -37,9 +37,10 @@ def _default_config() -> dict[str, Any]:
             "groq_text": "openai/gpt-oss-120b",
         },
         "ref_doc_settings": {
-            "max_inject_tokens_gemini": 3500,
-            "max_inject_tokens_groq": 1500,
-            "max_inject_tokens_vision": 1200,
+            "max_inject_tokens_gemini": 5000,
+            "max_inject_tokens_groq": 1800,
+            "max_inject_tokens_vision": 1500,
+            "implicit_stable_prefix_tokens": 4500,
         },
     }
 
@@ -98,8 +99,11 @@ def _public_ref_doc_summary() -> dict[str, Any]:
         "enabled": summary.get("enabled", False),
         "loaded": True,
         "original_name": summary.get("original_name"),
+        "word_count": summary.get("word_count", 0),
         "token_estimate": summary.get("token_estimate", 0),
+        "token_estimate_upper": summary.get("token_estimate_upper", 0),
         "chunk_count": summary.get("chunk_count", 0),
+        "doc_version": summary.get("doc_version"),
         "gemini_cache_mode": summary.get("gemini_cache_mode", "none"),
     }
 
@@ -114,9 +118,10 @@ def admin_config() -> dict[str, Any]:
     config.setdefault(
         "ref_doc_settings",
         {
-            "max_inject_tokens_gemini": 3500,
-            "max_inject_tokens_groq": 1500,
-            "max_inject_tokens_vision": 1200,
+            "max_inject_tokens_gemini": 5000,
+            "max_inject_tokens_groq": 1800,
+            "max_inject_tokens_vision": 1500,
+            "implicit_stable_prefix_tokens": 4500,
         },
     )
     return config

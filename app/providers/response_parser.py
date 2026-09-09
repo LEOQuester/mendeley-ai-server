@@ -2,7 +2,7 @@ import json
 import re
 from typing import Any
 
-from app.prompts import MCQ_ANSWER_JOIN
+from app.prompts import GENERAL_KNOWLEDGE_NOTE, MCQ_ANSWER_JOIN
 
 
 def extract_json_text(raw: str) -> str:
@@ -93,6 +93,24 @@ def answer_from_parsed_object(parsed: dict[str, Any]) -> str:
     return unwrap_answer_value(raw)
 
 
+def normalize_source_response(result: dict[str, str]) -> dict[str, str]:
+    source = str(result.get("source") or "document").strip().lower()
+    if source not in {"document", "general"}:
+        source = "document"
+    result["source"] = source
+
+    if source == "general":
+        result["source_note"] = GENERAL_KNOWLEDGE_NOTE
+        if result.get("type") == "descriptive":
+            answer = str(result.get("answer") or "").strip()
+            if answer and not answer.startswith(GENERAL_KNOWLEDGE_NOTE):
+                result["answer"] = f"{GENERAL_KNOWLEDGE_NOTE} {answer}"
+    else:
+        result.pop("source_note", None)
+
+    return result
+
+
 def parse_ai_response(raw: str) -> dict[str, str]:
     if not raw:
         return {"type": "mcq", "answer": "No response text received."}
@@ -103,10 +121,12 @@ def parse_ai_response(raw: str) -> dict[str, str]:
             answer = answer_from_parsed_object(parsed)
             if answer:
                 type_val = str(parsed.get("type") or parsed.get("Type") or "mcq").lower()
-                return {
+                result = {
                     "type": "descriptive" if "descript" in type_val else "mcq",
                     "answer": answer,
+                    "source": str(parsed.get("source") or parsed.get("Source") or "document"),
                 }
+                return normalize_source_response(result)
     except json.JSONDecodeError:
         pass
 
@@ -118,7 +138,7 @@ def parse_ai_response(raw: str) -> dict[str, str]:
         ]
         items = [item for item in items if item]
         if items:
-            return {"type": "mcq", "answer": unwrap_answer_value(items)}
+            return normalize_source_response({"type": "mcq", "answer": unwrap_answer_value(items), "source": "document"})
 
     answer_match = re.search(
         r'"(?:answer|Answer|choice|solution|text|result)"\s*:\s*"((?:[^"\\]|\\.)*)"',
@@ -128,13 +148,16 @@ def parse_ai_response(raw: str) -> dict[str, str]:
     if answer_match:
         cleaned = unwrap_answer_value(answer_match.group(1))
         if cleaned:
-            return {
-                "type": "descriptive" if "descript" in raw.lower() else "mcq",
-                "answer": cleaned,
-            }
+            return normalize_source_response(
+                {
+                    "type": "descriptive" if "descript" in raw.lower() else "mcq",
+                    "answer": cleaned,
+                    "source": "document",
+                }
+            )
 
     clean_text = unwrap_answer_value(re.sub(r"```[\s\S]*?```", "", raw))
     if clean_text and not re.match(r'^[\s{["]*type\b', clean_text, re.IGNORECASE):
-        return {"type": "mcq", "answer": clean_text[:500]}
+        return normalize_source_response({"type": "mcq", "answer": clean_text[:500], "source": "document"})
 
     raise ValueError("Could not parse answer from response.")
