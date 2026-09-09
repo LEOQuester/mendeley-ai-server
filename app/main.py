@@ -30,9 +30,10 @@ allow_origins = ["*"] if cors_origins.strip() == "*" else [item.strip() for item
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
