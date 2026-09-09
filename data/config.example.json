@@ -1,0 +1,29 @@
+{
+  "gemini_keys": [],
+  "groq_keys": [],
+  "gemini_text_models": [
+    { "id": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro" },
+    { "id": "gemini-3.7-flash", "label": "Gemini 3.7 Flash" },
+    { "id": "gemini-3.6-flash", "label": "Gemini 3.6 Flash" },
+    { "id": "gemini-3.5-flash", "label": "Gemini 3.5 Flash" },
+    { "id": "gemini-3.5-flash-lite", "label": "Gemini 3.5 Flash-Lite" },
+    { "id": "gemini-3.1-flash-lite", "label": "Gemini 3.1 Flash-Lite" }
+  ],
+  "gemini_vision_models": [
+    { "id": "gemini-3.7-flash", "label": "Gemini 3.7 Flash" },
+    { "id": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro" },
+    { "id": "gemini-3.6-flash", "label": "Gemini 3.6 Flash" },
+    { "id": "gemini-3.5-flash", "label": "Gemini 3.5 Flash" },
+    { "id": "gemini-3.5-flash-lite", "label": "Gemini 3.5 Flash-Lite" },
+    { "id": "gemini-3.1-flash-lite", "label": "Gemini 3.1 Flash-Lite" }
+  ],
+  "groq_text_models": [
+    { "id": "openai/gpt-oss-120b", "label": "GPT-OSS 120B" },
+    { "id": "openai/gpt-oss-20b", "label": "GPT-OSS 20B" }
+  ],
+  "defaults": {
+    "gemini_text": "gemini-3.1-pro-preview",
+    "gemini_vision": "gemini-3.7-flash",
+    "groq_text": "openai/gpt-oss-120b"
+  }
+}

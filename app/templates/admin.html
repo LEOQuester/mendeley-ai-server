@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mendeley AI Server — Admin</title>
+  <link rel="stylesheet" href="/static/admin.css">
+</head>
+<body>
+  <div class="page">
+    <header class="header">
+      <div>
+        <p class="eyebrow">Mendeley AI Server</p>
+        <h1>Admin Console</h1>
+        <p class="subtitle">Manage API keys, models, and defaults for the browser extension.</p>
+      </div>
+      {% if logged_in %}
+      <form method="post" action="/admin/logout">
+        <button type="submit" class="btn-secondary">Log out</button>
+      </form>
+      {% endif %}
+    </header>
+
+    {% if not logged_in %}
+    <section class="card login-card">
+      <h2>Sign in</h2>
+      <form method="post" action="/admin/login" class="stack">
+        <label>
+          <span>Admin password</span>
+          <input type="password" name="password" required autocomplete="current-password">
+        </label>
+        <button type="submit" class="btn-primary">Enter admin</button>
+      </form>
+    </section>
+    {% else %}
+
+    <section class="grid">
+      <article class="card">
+        <h2>Gemini API Keys</h2>
+        <ul class="key-list">
+          {% for key in config.gemini_keys %}
+          <li>
+            <span>{{ key.preview }}</span>
+            <form method="post" action="/admin/keys/remove">
+              <input type="hidden" name="provider" value="gemini">
+              <input type="hidden" name="index" value="{{ key.index }}">
+              <button type="submit" class="btn-danger">Remove</button>
+            </form>
+          </li>
+          {% else %}
+          <li class="empty">No Gemini keys configured.</li>
+          {% endfor %}
+        </ul>
+        <form method="post" action="/admin/keys/add" class="stack inline-form">
+          <input type="hidden" name="provider" value="gemini">
+          <input type="password" name="key" placeholder="Paste Gemini API key" required>
+          <button type="submit" class="btn-primary">Add Gemini key</button>
+        </form>
+      </article>
+
+      <article class="card">
+        <h2>Groq API Keys</h2>
+        <ul class="key-list">
+          {% for key in config.groq_keys %}
+          <li>
+            <span>{{ key.preview }}</span>
+            <form method="post" action="/admin/keys/remove">
+              <input type="hidden" name="provider" value="groq">
+              <input type="hidden" name="index" value="{{ key.index }}">
+              <button type="submit" class="btn-danger">Remove</button>
+            </form>
+          </li>
+          {% else %}
+          <li class="empty">No Groq keys configured.</li>
+          {% endfor %}
+        </ul>
+        <form method="post" action="/admin/keys/add" class="stack inline-form">
+          <input type="hidden" name="provider" value="groq">
+          <input type="password" name="key" placeholder="Paste Groq API key" required>
+          <button type="submit" class="btn-primary">Add Groq key</button>
+        </form>
+      </article>
+    </section>
+
+    <section class="card">
+      <h2>Default Models</h2>
+      <form method="post" action="/admin/defaults" class="defaults-form">
+        <label>
+          <span>Gemini text default</span>
+          <select name="gemini_text">
+            {% for model in config.gemini_text_models %}
+            <option value="{{ model.id }}" {% if config.defaults.gemini_text == model.id %}selected{% endif %}>{{ model.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span>Gemini vision default</span>
+          <select name="gemini_vision">
+            {% for model in config.gemini_vision_models %}
+            <option value="{{ model.id }}" {% if config.defaults.gemini_vision == model.id %}selected{% endif %}>{{ model.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span>Groq text default</span>
+          <select name="groq_text">
+            {% for model in config.groq_text_models %}
+            <option value="{{ model.id }}" {% if config.defaults.groq_text == model.id %}selected{% endif %}>{{ model.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button type="submit" class="btn-primary">Save defaults</button>
+      </form>
+    </section>
+
+    <section class="grid models-grid">
+      <article class="card">
+        <h2>Gemini Text Models</h2>
+        <ul class="model-list">
+          {% for model in config.gemini_text_models %}
+          <li>
+            <div>
+              <strong>{{ model.label }}</strong>
+              <code>{{ model.id }}</code>
+            </div>
+            <form method="post" action="/admin/models/remove">
+              <input type="hidden" name="provider" value="gemini">
+              <input type="hidden" name="model_type" value="text">
+              <input type="hidden" name="model_id" value="{{ model.id }}">
+              <button type="submit" class="btn-danger">Remove</button>
+            </form>
+          </li>
+          {% endfor %}
+        </ul>
+      </article>
+
+      <article class="card">
+        <h2>Gemini Vision Models</h2>
+        <ul class="model-list">
+          {% for model in config.gemini_vision_models %}
+          <li>
+            <div>
+              <strong>{{ model.label }}</strong>
+              <code>{{ model.id }}</code>
+            </div>
+            <form method="post" action="/admin/models/remove">
+              <input type="hidden" name="provider" value="gemini">
+              <input type="hidden" name="model_type" value="vision">
+              <input type="hidden" name="model_id" value="{{ model.id }}">
+              <button type="submit" class="btn-danger">Remove</button>
+            </form>
+          </li>
+          {% endfor %}
+        </ul>
+      </article>
+
+      <article class="card">
+        <h2>Groq Text Models</h2>
+        <ul class="model-list">
+          {% for model in config.groq_text_models %}
+          <li>
+            <div>
+              <strong>{{ model.label }}</strong>
+              <code>{{ model.id }}</code>
+            </div>
+            <form method="post" action="/admin/models/remove">
+              <input type="hidden" name="provider" value="groq">
+              <input type="hidden" name="model_type" value="text">
+              <input type="hidden" name="model_id" value="{{ model.id }}">
+              <button type="submit" class="btn-danger">Remove</button>
+            </form>
+          </li>
+          {% endfor %}
+        </ul>
+      </article>
+    </section>
+
+    <section class="card">
+      <h2>Add Model</h2>
+      <form method="post" action="/admin/models/add" class="add-model-form">
+        <label>
+          <span>Provider</span>
+          <select name="provider" required>
+            <option value="gemini">Gemini</option>
+            <option value="groq">Groq</option>
+          </select>
+        </label>
+        <label>
+          <span>Type</span>
+          <select name="model_type" required>
+            <option value="text">Text</option>
+            <option value="vision">Vision</option>
+          </select>
+        </label>
+        <label>
+          <span>Model ID</span>
+          <input type="text" name="model_id" placeholder="gemini-3.7-flash" required>
+        </label>
+        <label>
+          <span>Label</span>
+          <input type="text" name="label" placeholder="Gemini 3.7 Flash" required>
+        </label>
+        <button type="submit" class="btn-primary">Add model</button>
+      </form>
+    </section>
+
+    {% endif %}
+  </div>
+</body>
+</html>
