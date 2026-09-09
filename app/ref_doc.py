@@ -265,3 +265,19 @@ def full_ref_text_for_cache() -> str:
     if not chunks:
         return ""
     return "\n\n".join(chunk["text"] for chunk in chunks)
+
+
+def full_ref_context() -> str:
+    """Return the entire reference document for Gemini context caching."""
+    meta = load_meta()
+    if not meta or not meta.get("enabled"):
+        return ""
+
+    body = full_ref_text_for_cache()
+    if not body:
+        return ""
+
+    return (
+        "REFERENCE DOCUMENT (read before answering; base your answer on this document):\n"
+        f"{body}\n\n---\n"
+    )

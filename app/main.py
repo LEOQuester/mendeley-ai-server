@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from app import ref_doc, store
 from app.auth import SESSION_COOKIE, create_session_token, require_admin, verify_password
-from app.gemini_cache import delete_explicit_cache, try_create_explicit_cache
+from app.gemini_cache import cache_is_valid, delete_explicit_cache, try_create_explicit_cache
 from app.prompts import SYSTEM_PROMPT_MCQ
 from app.providers import gemini, groq
 
@@ -80,14 +80,31 @@ def _ref_settings(config: dict) -> dict:
     }
 
 
-def _build_ref_excerpt(provider: str, question_text: str, config: dict, *, vision: bool = False) -> str:
+def _build_ref_context(
+    provider: str,
+    question_text: str,
+    config: dict,
+    *,
+    vision: bool = False,
+    gemini_model: str | None = None,
+) -> str:
+    meta = ref_doc.load_meta()
+    if not meta or not meta.get("enabled"):
+        return ""
+
+    # Gemini text: send the FULL document so implicit/explicit caching can apply.
+    # Explicit cache already stores the doc — nothing extra to inject.
+    if provider == "gemini" and not vision:
+        if gemini_model and cache_is_valid(meta, gemini_model):
+            return ""
+        return ref_doc.full_ref_context()
+
+    # Groq + vision: free-tier TPM limits — retrieve only relevant sections (RAG-lite).
     settings = _ref_settings(config)
     if vision:
         max_tokens = settings.get("max_inject_tokens_vision", 1200)
-    elif provider == "groq":
-        max_tokens = settings.get("max_inject_tokens_groq", 1500)
     else:
-        max_tokens = settings.get("max_inject_tokens_gemini", 3500)
+        max_tokens = settings.get("max_inject_tokens_groq", 1500)
     return ref_doc.retrieve_excerpt(question_text, max_tokens=max_tokens)
 
 
@@ -154,8 +171,8 @@ async def analyze_text(payload: TextAnalyzeRequest) -> JSONResponse:
                 config.get("groq_text_models", []),
                 config.get("defaults", {}).get("groq_text", "openai/gpt-oss-120b"),
             )
-            ref_excerpt = _build_ref_excerpt("groq", payload.question_text, config)
-            result = await groq.call_groq_text(keys, model, payload.question_text, text_mode, ref_excerpt)
+            ref_context = _build_ref_context("groq", payload.question_text, config)
+            result = await groq.call_groq_text(keys, model, payload.question_text, text_mode, ref_context)
         else:
             keys = config.get("gemini_keys", [])
             if not keys:
@@ -165,8 +182,10 @@ async def analyze_text(payload: TextAnalyzeRequest) -> JSONResponse:
                 config.get("gemini_text_models", []),
                 config.get("defaults", {}).get("gemini_text", "gemini-3.1-pro-preview"),
             )
-            ref_excerpt = _build_ref_excerpt("gemini", payload.question_text, config)
-            result = await gemini.call_gemini_text(keys, model, payload.question_text, text_mode, ref_excerpt)
+            ref_context = _build_ref_context(
+                "gemini", payload.question_text, config, gemini_model=model
+            )
+            result = await gemini.call_gemini_text(keys, model, payload.question_text, text_mode, ref_context)
 
         return JSONResponse(result)
     except HTTPException:
@@ -189,9 +208,9 @@ async def analyze_vision(payload: VisionAnalyzeRequest) -> JSONResponse:
     )
 
     try:
-        ref_excerpt = _build_ref_excerpt("gemini", "", config, vision=True)
+        ref_context = _build_ref_context("gemini", "", config, vision=True)
         result = await gemini.call_gemini_vision(
-            keys, model, payload.image_base64, payload.mime_type, ref_excerpt
+            keys, model, payload.image_base64, payload.mime_type, ref_context
         )
         return JSONResponse(result)
     except Exception as exc:

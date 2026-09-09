@@ -37,15 +37,15 @@
     <section class="card ref-doc-card">
       <h2>Reference Document</h2>
       <p class="hint-block">
-        Upload a syllabus, study guide, or notes file. The server retrieves only the most relevant
-        sections per question to stay inside free-tier token limits. Gemini uses implicit/explicit
-        caching when possible; Groq gets a smaller excerpt.
+        Upload a syllabus, study guide, or notes file. The file is split into chunks for storage only.
+        <strong>Gemini</strong> receives the full document each request (context caching when possible).
+        <strong>Groq</strong> and screenshot vision use small relevant excerpts due to free-tier token limits.
       </p>
 
       {% if config.ref_doc %}
       <div class="ref-doc-status">
         <p><strong>{{ config.ref_doc.original_name }}</strong></p>
-        <p>{{ config.ref_doc.chunk_count }} chunks · ~{{ config.ref_doc.token_estimate }} tokens · cache: {{ config.ref_doc.gemini_cache_mode }}</p>
+        <p>{{ config.ref_doc.chunk_count }} stored sections · ~{{ config.ref_doc.token_estimate }} tokens · cache: {{ config.ref_doc.gemini_cache_mode }}</p>
         <p class="muted">Uploaded {{ config.ref_doc.uploaded_at }}</p>
       </div>
       <div class="ref-doc-actions">
