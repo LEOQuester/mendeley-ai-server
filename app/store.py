@@ -5,10 +5,12 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from app.data_paths import data_dir
+
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "data"
+DATA_DIR = data_dir()
 CONFIG_PATH = DATA_DIR / "config.json"
-EXAMPLE_PATH = DATA_DIR / "config.example.json"
+EXAMPLE_PATH = BASE_DIR / "data" / "config.example.json"
 
 _lock = threading.Lock()
 

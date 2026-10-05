@@ -8,6 +8,7 @@ from typing import Annotated, Any, Literal
 from fastapi import Cookie, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -40,6 +41,40 @@ app.add_middleware(
 )
 
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
+
+class AnalyzeTextLogMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        path = (request.url.path or "").rstrip("/") or "/"
+        if request.method.upper() != "POST" or path.lower() != "/api/analyze/text":
+            return await call_next(request)
+
+        body_bytes = await request.body()
+
+        async def receive():
+            return {"type": "http.request", "body": body_bytes, "more_body": False}
+
+        replay_request = Request(request.scope, receive)
+        response = await call_next(replay_request)
+
+        response_body = b""
+        async for chunk in response.body_iterator:
+            response_body += chunk
+
+        try:
+            _log_analyze_text_http(body_bytes, response.status_code, response_body)
+        except Exception:
+            logger.exception("Failed to write analyze/text entry to request log")
+
+        return Response(
+            content=response_body,
+            status_code=response.status_code,
+            headers=dict(response.headers),
+            media_type=response.media_type,
+        )
+
+
+app.add_middleware(AnalyzeTextLogMiddleware)
 
 
 class TextAnalyzeRequest(BaseModel):
@@ -145,20 +180,7 @@ async def _refresh_gemini_cache(config: dict, model: str) -> None:
 @app.on_event("startup")
 def startup() -> None:
     store.ensure_config()
-
-
-@app.get("/")
-async def root():
-    return RedirectResponse(url="/admin", status_code=302)
-
-
-@app.get("/health")
-async def health() -> dict[str, str | int | None]:
-    return {
-        "status": "ok",
-        "analyze_log_entries": request_log.entry_count(),
-        "analyze_log_latest_utc": request_log.latest_timestamp(),
-    }
+    request_log.init_from_disk()
 
 
 def _parse_analyze_request_body(body_bytes: bytes) -> dict[str, Any]:
@@ -219,31 +241,19 @@ def _log_analyze_text_http(body_bytes: bytes, status_code: int, response_body: b
     )
 
 
-@app.middleware("http")
-async def log_analyze_text_traffic(request: Request, call_next):
-    if request.method != "POST" or request.url.path != "/api/analyze/text":
-        return await call_next(request)
+@app.get("/")
+async def root():
+    return RedirectResponse(url="/admin", status_code=302)
 
-    body_bytes = await request.body()
 
-    async def receive():
-        return {"type": "http.request", "body": body_bytes, "more_body": False}
-
-    replay_request = Request(request.scope, receive)
-    response = await call_next(replay_request)
-
-    response_body = b""
-    async for chunk in response.body_iterator:
-        response_body += chunk
-
-    _log_analyze_text_http(body_bytes, response.status_code, response_body)
-
-    return Response(
-        content=response_body,
-        status_code=response.status_code,
-        headers=dict(response.headers),
-        media_type=response.media_type,
-    )
+@app.get("/health")
+async def health() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "analyze_log_entries": request_log.entry_count(),
+        "analyze_log_latest_utc": request_log.latest_timestamp(),
+        **request_log.debug_info(),
+    }
 
 
 @app.get("/api/config")
@@ -492,6 +502,7 @@ async def admin_request_log(
             "page": current_page,
             "total_pages": total_pages,
             "page_size": request_log.DEFAULT_PAGE_SIZE,
+            "log_debug": request_log.debug_info(),
         },
     )
 
