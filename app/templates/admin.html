@@ -15,9 +15,12 @@
         <p class="subtitle">Manage API keys, models, and defaults for the browser extension.</p>
       </div>
       {% if logged_in %}
-      <form method="post" action="/admin/logout">
-        <button type="submit" class="btn-secondary">Log out</button>
-      </form>
+      <div class="header-actions">
+        <a href="/admin/request-log" class="btn-primary">Extension request log</a>
+        <form method="post" action="/admin/logout">
+          <button type="submit" class="btn-secondary">Log out</button>
+        </form>
+      </div>
       {% endif %}
     </header>
 
@@ -181,6 +184,34 @@
       </form>
     </section>
 
+    <section class="card" id="text-ping-card">
+      <h2>Text API ping test</h2>
+      <p class="hint-block">
+        Tests the <strong>text</strong> API — the same path the browser extension uses when you
+        <strong>select text and press H</strong> (not screenshot / vision).
+        Sends a one-word challenge; the model should reply exactly <code>200</code>.
+      </p>
+      <div class="ping-form">
+        <label>
+          <span>Provider</span>
+          <select id="ping-provider">
+            <option value="gemini">Gemini (text)</option>
+            <option value="groq">Groq (text)</option>
+          </select>
+        </label>
+        <label>
+          <span>Model</span>
+          <select id="ping-model"></select>
+        </label>
+        <label>
+          <span>API key</span>
+          <select id="ping-key-index"></select>
+        </label>
+        <button type="button" class="btn-primary" id="ping-run-btn">Run text ping test</button>
+      </div>
+      <p class="ping-result" id="ping-result" aria-live="polite"></p>
+    </section>
+
     <section class="grid models-grid">
       <article class="card">
         <h2>Gemini Text Models</h2>
@@ -274,5 +305,9 @@
 
     {% endif %}
   </div>
+  {% if logged_in %}
+  <script id="ping-models-data" type="application/json">{{ ping_models_json | safe }}</script>
+  <script src="/static/admin.js"></script>
+  {% endif %}
 </body>
 </html>

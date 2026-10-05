@@ -1,6 +1,6 @@
 # Mendeley AI Server
 
-FastAPI backend for the Mendeley Web Importer extension. Hosts API keys, model lists, and AI proxy endpoints so the browser extension never stores provider secrets.
+FastAPI backend for the Web Importer for Mendeley extension. Hosts API keys, model lists, and AI proxy endpoints so the browser extension never stores provider secrets.
 
 ## Features
 
@@ -62,6 +62,10 @@ Open:
 - Health: `http://localhost:8000/health`
 - Admin: `http://localhost:8000/admin`
 - Public config: `http://localhost:8000/api/config`
+
+In **Admin → Text API ping test**, pick provider, **text model**, and API key, then **Run text ping test**. This uses the same **text** API as the extension (**select text + H**, not screenshot). Success = model replies exactly `200`.
+
+**Extension request log** (`/admin/request-log`, button on the admin home page): timestamped table of text sent to `POST /api/analyze/text` and the model response. Newest first, 10 entries per page.
 
 ## Railway deployment
 

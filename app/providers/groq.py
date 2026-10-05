@@ -5,7 +5,7 @@ from typing import Any
 import httpx
 
 from app import chat_sessions
-from app.prompts import API_TEST_PROMPT, SYSTEM_PROMPT_DESCRIPTIVE, SYSTEM_PROMPT_MCQ, TEXT_ONLY_PREAMBLE
+from app.prompts import API_TEST_PROMPT, PING_TEST_PROMPT, SYSTEM_PROMPT_DESCRIPTIVE, SYSTEM_PROMPT_MCQ, TEXT_ONLY_PREAMBLE
 from app.providers.key_rotation import retry_with_rotation_async
 from app.providers.response_parser import parse_ai_response
 
@@ -147,3 +147,32 @@ async def test_groq_key(api_key: str, model: str) -> str:
         raise ProviderError("Groq returned an empty response.")
     parse_ai_response(text)
     return f"Groq key works with {model}."
+
+
+async def ping_groq_text_key(api_key: str, model: str) -> str:
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            json={
+                "model": model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": PING_TEST_PROMPT,
+                    }
+                ],
+                "temperature": 0,
+                "max_tokens": 8,
+            },
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+        )
+
+    if not response.is_success:
+        if response.status_code == 429:
+            raise ProviderError("Groq rate limit hit. Wait a minute or try another model.")
+        _raise_http_error("Groq ping failed", response.status_code, response.text)
+
+    text = (response.json().get("choices") or [{}])[0].get("message", {}).get("content")
+    if not text:
+        raise ProviderError("Groq returned an empty response.")
+    return text.strip()

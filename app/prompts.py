@@ -74,3 +74,9 @@ TEXT_RESPONSE_SCHEMA = {
 }
 
 API_TEST_PROMPT = 'Respond with JSON only: {"type":"mcq","answer":"Option A","source":"document"}'
+
+PING_TEST_PROMPT = (
+    'Health check for text API. Reply with exactly one word: 200. '
+    "No JSON, no punctuation, no explanation, no other words."
+)
+PING_EXPECTED_ANSWER = "200"

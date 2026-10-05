@@ -8,6 +8,7 @@ from app import chat_sessions, ref_doc
 from app.gemini_cache import cache_is_valid
 from app.prompts import (
     API_TEST_PROMPT,
+    PING_TEST_PROMPT,
     SYSTEM_PROMPT_DESCRIPTIVE,
     SYSTEM_PROMPT_MCQ,
     TEXT_ONLY_PREAMBLE,
@@ -366,3 +367,22 @@ async def test_gemini_text_key(api_key: str, model: str) -> str:
 async def test_gemini_vision_key(api_key: str, model: str) -> str:
     await request_gemini_vision(api_key, model, VISION_TEST_PNG, "image/png")
     return f"Vision: {model} OK."
+
+
+async def ping_gemini_text_key(api_key: str, model: str) -> str:
+    data = await _post_gemini(
+        model,
+        api_key,
+        {
+            "contents": [{"parts": [{"text": PING_TEST_PROMPT}]}],
+            "generationConfig": {
+                "maxOutputTokens": 16,
+                "temperature": 0,
+            },
+        },
+        30.0,
+    )
+    text = _get_gemini_response_text(data)
+    if not text:
+        raise ProviderError("Gemini text returned an empty response.")
+    return text.strip()

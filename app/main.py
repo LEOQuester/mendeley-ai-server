@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import re
@@ -11,7 +12,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
-from app import chat_sessions, ref_doc, store
+from app.prompts import PING_EXPECTED_ANSWER
+from app import chat_sessions, ref_doc, request_log, store
 from app.auth import SESSION_COOKIE, create_session_token, require_admin, verify_password
 from app.gemini_cache import delete_explicit_cache, refresh_gemini_cache_for_doc
 from app.providers import gemini, groq
@@ -62,6 +64,19 @@ class TestKeyRequest(BaseModel):
     provider: Literal["gemini", "groq"]
     key: str = Field(min_length=1)
     model: str | None = None
+
+
+class AdminTextPingRequest(BaseModel):
+    provider: Literal["gemini", "groq"]
+    model: str = Field(min_length=1)
+    key_index: int = Field(default=0, ge=0)
+
+
+def _normalize_ping_token(text: str) -> str:
+    cleaned = (text or "").strip().strip("\"'`")
+    if not cleaned:
+        return ""
+    return cleaned.split()[0].strip(".,;:!?")
 
 
 def _resolve_text_mode(question_text: str, mode: str) -> str:
@@ -146,21 +161,36 @@ async def get_public_config() -> JSONResponse:
     return JSONResponse(store.public_config())
 
 
+def _admin_session_valid(session: str | None) -> bool:
+    if not session:
+        return False
+    try:
+        from app.auth import _serializer
+
+        _serializer().loads(session, max_age=60 * 60 * 12)
+        return True
+    except Exception:
+        return False
+
+
 @app.post("/api/analyze/text")
 async def analyze_text(payload: TextAnalyzeRequest) -> JSONResponse:
     config = store.load_config()
     text_mode = _resolve_text_mode(payload.question_text, payload.mode)
+    provider = payload.provider
+    model = ""
+    ref_context = ""
 
     try:
         if payload.provider == "groq":
             keys = config.get("groq_keys", [])
-            if not keys:
-                raise HTTPException(status_code=503, detail="No Groq API keys configured on the server.")
             model = _normalize_model(
                 payload.model,
                 config.get("groq_text_models", []),
                 config.get("defaults", {}).get("groq_text", "openai/gpt-oss-120b"),
             )
+            if not keys:
+                raise HTTPException(status_code=503, detail="No Groq API keys configured on the server.")
             session_id, session = chat_sessions.get_or_create_session(payload.session_id, model)
             ref_context = resolve_ref_inject("groq", payload.question_text, config)
             result = await groq.call_groq_text(
@@ -169,13 +199,13 @@ async def analyze_text(payload: TextAnalyzeRequest) -> JSONResponse:
             )
         else:
             keys = config.get("gemini_keys", [])
-            if not keys:
-                raise HTTPException(status_code=503, detail="No Gemini API keys configured on the server.")
             model = _normalize_model(
                 payload.model,
                 config.get("gemini_text_models", []),
                 config.get("defaults", {}).get("gemini_text", "gemini-3.1-pro-preview"),
             )
+            if not keys:
+                raise HTTPException(status_code=503, detail="No Gemini API keys configured on the server.")
             session_id, session = chat_sessions.get_or_create_session(payload.session_id, model)
             ref_context = resolve_ref_inject(
                 "gemini", payload.question_text, config, gemini_model=model
@@ -185,6 +215,15 @@ async def analyze_text(payload: TextAnalyzeRequest) -> JSONResponse:
                 session_id=session_id, session=session,
             )
 
+        request_log.append_entry(
+            kind="text",
+            provider=provider,
+            model=model,
+            mode=text_mode,
+            request_text=payload.question_text,
+            response_text=request_log.format_response_for_log(result),
+            ok=True,
+        )
         return JSONResponse(
             {
                 **result,
@@ -192,9 +231,30 @@ async def analyze_text(payload: TextAnalyzeRequest) -> JSONResponse:
                 "ref_mode": _ref_mode(payload.provider, model, ref_context),
             }
         )
-    except HTTPException:
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        request_log.append_entry(
+            kind="text",
+            provider=provider,
+            model=model or "—",
+            mode=text_mode,
+            request_text=payload.question_text,
+            response_text="",
+            ok=False,
+            error=detail,
+        )
         raise
     except Exception as exc:
+        request_log.append_entry(
+            kind="text",
+            provider=provider,
+            model=model or "—",
+            mode=text_mode,
+            request_text=payload.question_text,
+            response_text="",
+            ok=False,
+            error=str(exc),
+        )
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
@@ -267,17 +327,71 @@ async def test_key(payload: TestKeyRequest) -> JSONResponse:
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
 
 
+@app.post("/admin/api/text-ping")
+async def admin_text_ping(
+    payload: AdminTextPingRequest,
+    _: Annotated[None, Depends(require_admin)],
+) -> JSONResponse:
+    """Text-only ping (same API path as extension text selection — not vision/screenshot)."""
+    config = store.load_config()
+    keys_field = "gemini_keys" if payload.provider == "gemini" else "groq_keys"
+    model_field = "gemini_text_models" if payload.provider == "gemini" else "groq_text_models"
+    default_model = config.get("defaults", {}).get(
+        "gemini_text" if payload.provider == "gemini" else "groq_text",
+        "gemini-3.1-pro-preview" if payload.provider == "gemini" else "openai/gpt-oss-120b",
+    )
+
+    keys = config.get(keys_field, [])
+    if not keys:
+        return JSONResponse(
+            {"ok": False, "message": f"No {payload.provider} API keys configured."},
+            status_code=400,
+        )
+    if payload.key_index >= len(keys):
+        return JSONResponse({"ok": False, "message": "Invalid key index."}, status_code=400)
+
+    model = _normalize_model(payload.model, config.get(model_field, []), default_model)
+    api_key = keys[payload.key_index]
+    key_preview = f"****{api_key[-4:]}" if len(api_key) >= 4 else "****"
+
+    try:
+        if payload.provider == "gemini":
+            raw = await gemini.ping_gemini_text_key(api_key, model)
+        else:
+            raw = await groq.ping_groq_text_key(api_key, model)
+    except Exception as exc:
+        return JSONResponse(
+            {
+                "ok": False,
+                "provider": payload.provider,
+                "model": model,
+                "key_preview": key_preview,
+                "expected": PING_EXPECTED_ANSWER,
+                "message": str(exc),
+            },
+            status_code=400,
+        )
+
+    actual = _normalize_ping_token(raw)
+    ok = actual == PING_EXPECTED_ANSWER
+    return JSONResponse(
+        {
+            "ok": ok,
+            "provider": payload.provider,
+            "model": model,
+            "key_preview": key_preview,
+            "expected": PING_EXPECTED_ANSWER,
+            "actual": raw,
+            "actual_normalized": actual,
+            "message": "Ping OK — model replied 200." if ok else f'Expected "{PING_EXPECTED_ANSWER}", got "{actual or raw}".',
+        },
+        status_code=200 if ok else 400,
+    )
+
+
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request, session: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None):
-    logged_in = False
-    if session:
-        try:
-            from app.auth import _serializer
-
-            _serializer().loads(session, max_age=60 * 60 * 12)
-            logged_in = True
-        except Exception:
-            logged_in = False
+    logged_in = _admin_session_valid(session)
 
     return templates.TemplateResponse(
         "admin.html",
@@ -285,6 +399,40 @@ async def admin_page(request: Request, session: Annotated[str | None, Cookie(ali
             "request": request,
             "logged_in": logged_in,
             "config": store.admin_config() if logged_in else None,
+            "ping_models_json": json.dumps(
+                {
+                    "gemini": store.load_config().get("gemini_text_models", []) if logged_in else [],
+                    "groq": store.load_config().get("groq_text_models", []) if logged_in else [],
+                    "gemini_keys": store.admin_config().get("gemini_keys", []) if logged_in else [],
+                    "groq_keys": store.admin_config().get("groq_keys", []) if logged_in else [],
+                    "defaults": store.load_config().get("defaults", {}) if logged_in else {},
+                }
+            )
+            if logged_in
+            else "{}",
+        },
+    )
+
+
+@app.get("/admin/request-log", response_class=HTMLResponse)
+async def admin_request_log(
+    request: Request,
+    page: int = 1,
+    session: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None,
+):
+    if not _admin_session_valid(session):
+        return RedirectResponse(url="/admin", status_code=302)
+
+    entries, total, total_pages, current_page = request_log.get_page(page, request_log.DEFAULT_PAGE_SIZE)
+    return templates.TemplateResponse(
+        "request_log.html",
+        {
+            "request": request,
+            "entries": entries,
+            "total": total,
+            "page": current_page,
+            "total_pages": total_pages,
+            "page_size": request_log.DEFAULT_PAGE_SIZE,
         },
     )
 

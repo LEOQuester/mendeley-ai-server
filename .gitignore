@@ -7,6 +7,7 @@ venv/
 .env.*
 !.env.example
 data/config.json
+data/request_log.json
 data/ref_docs/
 *.log
 .DS_Store

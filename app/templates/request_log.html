@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mendeley AI Server — Request log</title>
+  <link rel="stylesheet" href="/static/admin.css">
+</head>
+<body>
+  <div class="page">
+    <header class="header">
+      <div>
+        <p class="eyebrow">Mendeley AI Server</p>
+        <h1>Extension request log</h1>
+        <p class="subtitle">Text sent by the browser extension and server responses (newest first).</p>
+      </div>
+      <div class="header-actions">
+        <a href="/admin" class="btn-secondary">Back to admin</a>
+        <form method="post" action="/admin/logout">
+          <button type="submit" class="btn-secondary">Log out</button>
+        </form>
+      </div>
+    </header>
+
+    <section class="card">
+      <div class="log-toolbar">
+        <p class="log-summary">
+          {{ total }} entr{{ "y" if total == 1 else "ies" }}
+          {% if total_pages > 1 %}
+          — page {{ page }} of {{ total_pages }}
+          {% endif %}
+        </p>
+        <p class="hint-block">Showing {{ page_size }} per page. Long text is scrollable inside each cell.</p>
+      </div>
+
+      {% if entries %}
+      <div class="log-table-wrap">
+        <table class="log-table">
+          <thead>
+            <tr>
+              <th>Time (UTC)</th>
+              <th>Provider / model</th>
+              <th>Mode</th>
+              <th>Request text</th>
+              <th>Response</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in entries %}
+            <tr class="{{ 'log-row-error' if not row.ok else '' }}">
+              <td class="log-ts">{{ row.ts }}</td>
+              <td>
+                <span class="log-provider">{{ row.provider }}</span>
+                <span class="log-model">{{ row.model }}</span>
+                <span class="log-kind">{{ row.kind }}</span>
+              </td>
+              <td>{{ row.mode }}</td>
+              <td><pre class="log-cell">{{ row.request_text }}</pre></td>
+              <td>
+                {% if row.ok %}
+                <pre class="log-cell log-cell-ok">{{ row.response_text }}</pre>
+                {% else %}
+                <pre class="log-cell log-cell-error">{{ row.error or row.response_text or "Error" }}</pre>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {% if total_pages > 1 %}
+      <nav class="pagination" aria-label="Request log pages">
+        {% if page > 1 %}
+        <a href="/admin/request-log?page={{ page - 1 }}" class="btn-secondary">← Newer</a>
+        {% else %}
+        <span class="btn-secondary btn-disabled" aria-disabled="true">← Newer</span>
+        {% endif %}
+        <span class="pagination-label">Page {{ page }} / {{ total_pages }}</span>
+        {% if page < total_pages %}
+        <a href="/admin/request-log?page={{ page + 1 }}" class="btn-secondary">Older →</a>
+        {% else %}
+        <span class="btn-secondary btn-disabled" aria-disabled="true">Older →</span>
+        {% endif %}
+      </nav>
+      {% endif %}
+      {% else %}
+      <p class="hint-block">No requests logged yet. Use the extension (select text + H) or wait for traffic to <code>/api/analyze/text</code>.</p>
+      {% endif %}
+    </section>
+  </div>
+</body>
+</html>
