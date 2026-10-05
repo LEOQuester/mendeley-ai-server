@@ -82,6 +82,19 @@ def append_entry(
         _save_entries(entries)
 
 
+def entry_count() -> int:
+    with _lock:
+        return len(_load_entries())
+
+
+def latest_timestamp() -> str | None:
+    with _lock:
+        entries = _load_entries()
+    if not entries:
+        return None
+    return entries[0].get("ts")
+
+
 def get_page(page: int, per_page: int = DEFAULT_PAGE_SIZE) -> tuple[list[dict[str, Any]], int, int, int]:
     per_page = max(1, min(per_page, 100))
     with _lock:

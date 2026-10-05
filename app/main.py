@@ -3,11 +3,12 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import Cookie, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from starlette.responses import Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -152,8 +153,97 @@ async def root():
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health() -> dict[str, str | int | None]:
+    return {
+        "status": "ok",
+        "analyze_log_entries": request_log.entry_count(),
+        "analyze_log_latest_utc": request_log.latest_timestamp(),
+    }
+
+
+def _parse_analyze_request_body(body_bytes: bytes) -> dict[str, Any]:
+    try:
+        data = json.loads(body_bytes.decode("utf-8"))
+        if isinstance(data, dict):
+            return data
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        pass
+    return {}
+
+
+def _log_analyze_text_http(body_bytes: bytes, status_code: int, response_body: bytes) -> None:
+    req = _parse_analyze_request_body(body_bytes)
+    question_text = str(req.get("question_text") or "").strip()
+    if not question_text and body_bytes:
+        question_text = body_bytes[:2000].decode("utf-8", errors="replace")
+    provider = str(req.get("provider") or "—")
+    model = str(req.get("model") or "—")
+    mode = str(req.get("mode") or "auto")
+
+    ok = 200 <= status_code < 300
+    response_text = ""
+    error: str | None = None
+
+    if ok:
+        try:
+            result = json.loads(response_body.decode("utf-8"))
+            if isinstance(result, dict):
+                response_text = request_log.format_response_for_log(result)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            response_text = response_body[:2000].decode("utf-8", errors="replace")
+    else:
+        try:
+            payload = json.loads(response_body.decode("utf-8"))
+            if isinstance(payload, dict):
+                detail = payload.get("detail")
+                if isinstance(detail, list):
+                    error = " ".join(
+                        str(item.get("msg") or item.get("message") or item) for item in detail
+                    )
+                else:
+                    error = str(detail or payload.get("message") or payload)
+            else:
+                error = str(payload)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            error = response_body[:500].decode("utf-8", errors="replace") or f"HTTP {status_code}"
+
+    request_log.append_entry(
+        kind="text",
+        provider=provider,
+        model=model,
+        mode=mode,
+        request_text=question_text or "(empty or invalid JSON body)",
+        response_text=response_text,
+        ok=ok,
+        error=error if not ok else None,
+    )
+
+
+@app.middleware("http")
+async def log_analyze_text_traffic(request: Request, call_next):
+    if request.method != "POST" or request.url.path != "/api/analyze/text":
+        return await call_next(request)
+
+    body_bytes = await request.body()
+
+    async def receive():
+        return {"type": "http.request", "body": body_bytes, "more_body": False}
+
+    replay_request = Request(request.scope, receive)
+    response = await call_next(replay_request)
+
+    response_body = b""
+    async for chunk in response.body_iterator:
+        response_body += chunk
+
+    _log_analyze_text_http(body_bytes, response.status_code, response_body)
+
+    return Response(
+        content=response_body,
+        status_code=response.status_code,
+        headers=dict(response.headers),
+        media_type=response.media_type,
+    )
 
 
 @app.get("/api/config")
@@ -177,7 +267,6 @@ def _admin_session_valid(session: str | None) -> bool:
 async def analyze_text(payload: TextAnalyzeRequest) -> JSONResponse:
     config = store.load_config()
     text_mode = _resolve_text_mode(payload.question_text, payload.mode)
-    provider = payload.provider
     model = ""
     ref_context = ""
 
@@ -215,15 +304,6 @@ async def analyze_text(payload: TextAnalyzeRequest) -> JSONResponse:
                 session_id=session_id, session=session,
             )
 
-        request_log.append_entry(
-            kind="text",
-            provider=provider,
-            model=model,
-            mode=text_mode,
-            request_text=payload.question_text,
-            response_text=request_log.format_response_for_log(result),
-            ok=True,
-        )
         return JSONResponse(
             {
                 **result,
@@ -231,30 +311,9 @@ async def analyze_text(payload: TextAnalyzeRequest) -> JSONResponse:
                 "ref_mode": _ref_mode(payload.provider, model, ref_context),
             }
         )
-    except HTTPException as exc:
-        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
-        request_log.append_entry(
-            kind="text",
-            provider=provider,
-            model=model or "—",
-            mode=text_mode,
-            request_text=payload.question_text,
-            response_text="",
-            ok=False,
-            error=detail,
-        )
+    except HTTPException:
         raise
     except Exception as exc:
-        request_log.append_entry(
-            kind="text",
-            provider=provider,
-            model=model or "—",
-            mode=text_mode,
-            request_text=payload.question_text,
-            response_text="",
-            ok=False,
-            error=str(exc),
-        )
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 

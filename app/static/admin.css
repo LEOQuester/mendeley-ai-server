@@ -380,7 +380,10 @@ a.btn-secondary {
   color: var(--muted);
 }
 
-.btn-disabled {
-  opacity: 0.45;
-  pointer-events: none;
+.log-help p {
+  margin: 0 0 8px;
+}
+
+.log-help p:last-child {
+  margin-bottom: 0;
 }

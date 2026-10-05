@@ -30,7 +30,11 @@
           — page {{ page }} of {{ total_pages }}
           {% endif %}
         </p>
-        <p class="hint-block">Showing {{ page_size }} per page. Long text is scrollable inside each cell.</p>
+        <div class="hint-block log-help">
+          <p><strong>Only rows here mean the extension hit <code>POST /api/analyze/text</code>.</strong> Railway’s <em>Network</em> tab (TCP arrows) is mostly internal/outbound traffic — not proof your browser sent analyze requests.</p>
+          <p>Quick check: open <code>{{ request.base_url }}health</code> — after pressing H, <code>analyze_log_entries</code> should increase and <code>analyze_log_latest_utc</code> should update.</p>
+          <p>In the extension: turn on <strong>Debug trace</strong> in settings, press H, and look for <code>server HTTP</code> with status 200 (or an error). Bottom-left HUD shows capture/analyze steps.</p>
+        </div>
       </div>
 
       {% if entries %}
