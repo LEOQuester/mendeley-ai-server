@@ -182,8 +182,10 @@ def _build_gemini_vision_contents(base64_image: str, mime_type: str, variant: di
 
     prompt_prefix = f"{VISION_SYSTEM_PROMPT}\n\n" if variant["system_in_user"] else ""
     user_prompt = (
-        f"{prompt_prefix}Read the exam question and every option in this screenshot. "
-        'Return JSON only: {"type":"mcq","answer":"exact option text"}'
+        f"{prompt_prefix}Read the exam question in this screenshot. "
+        'If MCQ with options: {"type":"mcq","answer":"exact option text(s)","source":"document"|"general"}. '
+        'If not MCQ: {"type":"descriptive","answer":"one short sentence","source":"document"|"general"}. '
+        "JSON only."
     )
     return [{"parts": [image_part, {"text": user_prompt}]}]
 

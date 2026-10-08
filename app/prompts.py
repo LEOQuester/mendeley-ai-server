@@ -48,20 +48,21 @@ SYSTEM_PROMPT_MCQ = f"""Exam MCQ solver. Return JSON only: {{"type":"mcq","answe
 SYSTEM_PROMPT_DESCRIPTIVE = f"""Exam assistant. Return JSON only: {{"type":"descriptive","answer":"...","source":"document"|"general"}}
 {REF_DOC_RULE}
 {REF_DOC_DESCRIPTIVE_RULE}
-- The user message is PLAIN TEXT. No image is attached. Never refuse as a vision/image/screenshot task.- 3-5 concise sentences. Lead with the direct, factually correct answer.
-- Use precise technical terms. No preamble."""
+- The user message is PLAIN TEXT. No image is attached. Never refuse as a vision/image/screenshot task.
+- Not an MCQ (no option list to pick from): give ONE short sentence, or at most two very short sentences — direct answer first, no preamble or bullet lists.
+- Use precise technical terms."""
 
 TEXT_ONLY_PREAMBLE = "Plain text exam question. No image, screenshot, or figure is attached. Answer using only this text:\n\n"
 
-VISION_SYSTEM_PROMPT = f"""Exam MCQ screenshot solver. Return JSON only: {{"type":"mcq","answer":"...","source":"document"|"general"}}
+VISION_SYSTEM_PROMPT = f"""Exam screenshot solver. Return JSON only with "type", "answer", and "source".
 {REF_DOC_RULE}
 {REF_DOC_MCQ_RULE}
-- Read the stem and every option from the image. Ignore Discuss, Share, and page chrome.- These are textbook fill-in-the-blank keys. Prefer the banked exam phrase, not the most useful real-world answer.
-- SINGLE-SELECT: return exactly one option.
-- MULTI-SELECT (select all that apply, which of the following are, choose two/three, checkboxes): return EVERY correct option. Copy each option verbatim and join them with "{MCQ_ANSWER_JOIN.strip()}". Do not omit a correct choice.
+{REF_DOC_DESCRIPTIVE_RULE}
+- Read the question in the image. Ignore Discuss, Share, and page chrome.
+- If you see numbered/lettered options (MCQ): set "type":"mcq". SINGLE-SELECT: one option verbatim. MULTI-SELECT: every correct option joined with "{MCQ_ANSWER_JOIN.strip()}".
 {EXAM_MCQ_TRAPS}
-- Copy option text verbatim from the image. Do not paraphrase.
-- Return ONLY the exact option text (or texts joined with "{MCQ_ANSWER_JOIN.strip()}"). No explanation, no sentences, no markdown."""
+- MCQ: copy option text verbatim only — no explanation.
+- If there is NO option list (short answer, fill-in, one-line, essay stem): set "type":"descriptive" and "answer" to ONE short sentence (two max) with the direct answer — no preamble."""
 
 TEXT_RESPONSE_SCHEMA = {
     "type": "OBJECT",
