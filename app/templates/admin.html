@@ -108,10 +108,18 @@
     <section class="grid">
       <article class="card">
         <h2>Gemini API Keys</h2>
+        {% if config.gemini_premium_preview %}
+        <p class="hint">Premium (always tried first): <strong>{{ config.gemini_premium_preview }}</strong>
+          <form method="post" action="/admin/keys/premium/clear" class="inline-form">
+            <input type="hidden" name="provider" value="gemini">
+            <button type="submit" class="btn-secondary">Clear premium</button>
+          </form>
+        </p>
+        {% endif %}
         <ul class="key-list">
           {% for key in config.gemini_keys %}
           <li>
-            <span>{{ key.preview }}</span>
+            <span>{{ key.preview }}{% if key.is_premium %} <em class="badge">premium</em>{% endif %}</span>
             <form method="post" action="/admin/keys/remove">
               <input type="hidden" name="provider" value="gemini">
               <input type="hidden" name="index" value="{{ key.index }}">
@@ -127,14 +135,27 @@
           <input type="password" name="key" placeholder="Paste Gemini API key" required>
           <button type="submit" class="btn-primary">Add Gemini key</button>
         </form>
+        <form method="post" action="/admin/keys/premium" class="stack inline-form">
+          <input type="hidden" name="provider" value="gemini">
+          <input type="password" name="key" placeholder="Set Gemini premium key (priority)" required>
+          <button type="submit" class="btn-primary">Set Gemini premium</button>
+        </form>
       </article>
 
       <article class="card">
         <h2>Groq API Keys</h2>
+        {% if config.groq_premium_preview %}
+        <p class="hint">Premium (always tried first): <strong>{{ config.groq_premium_preview }}</strong>
+          <form method="post" action="/admin/keys/premium/clear" class="inline-form">
+            <input type="hidden" name="provider" value="groq">
+            <button type="submit" class="btn-secondary">Clear premium</button>
+          </form>
+        </p>
+        {% endif %}
         <ul class="key-list">
           {% for key in config.groq_keys %}
           <li>
-            <span>{{ key.preview }}</span>
+            <span>{{ key.preview }}{% if key.is_premium %} <em class="badge">premium</em>{% endif %}</span>
             <form method="post" action="/admin/keys/remove">
               <input type="hidden" name="provider" value="groq">
               <input type="hidden" name="index" value="{{ key.index }}">
@@ -149,6 +170,11 @@
           <input type="hidden" name="provider" value="groq">
           <input type="password" name="key" placeholder="Paste Groq API key" required>
           <button type="submit" class="btn-primary">Add Groq key</button>
+        </form>
+        <form method="post" action="/admin/keys/premium" class="stack inline-form">
+          <input type="hidden" name="provider" value="groq">
+          <input type="password" name="key" placeholder="Set Groq premium key (priority)" required>
+          <button type="submit" class="btn-primary">Set Groq premium</button>
         </form>
       </article>
     </section>

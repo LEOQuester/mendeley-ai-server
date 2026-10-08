@@ -142,7 +142,7 @@ def _ref_mode(provider: str, model: str, ref_context: str) -> str:
 
 
 async def _refresh_gemini_cache(config: dict, model: str) -> None:
-    keys = config.get("gemini_keys", [])
+    keys = store.ordered_provider_keys("gemini", config)
     if not keys:
         ref_doc.update_cache_meta(None, None, None, "none", "No Gemini API keys configured.")
         return
@@ -299,7 +299,7 @@ async def analyze_text(payload: TextAnalyzeRequest) -> JSONResponse:
 
     try:
         if payload.provider == "groq":
-            keys = config.get("groq_keys", [])
+            keys = store.ordered_provider_keys("groq", config)
             model = _normalize_model(
                 payload.model,
                 config.get("groq_text_models", []),
@@ -314,7 +314,7 @@ async def analyze_text(payload: TextAnalyzeRequest) -> JSONResponse:
                 session_id=session_id, session=session,
             )
         else:
-            keys = config.get("gemini_keys", [])
+            keys = store.ordered_provider_keys("gemini", config)
             model = _normalize_model(
                 payload.model,
                 config.get("gemini_text_models", []),
@@ -347,7 +347,7 @@ async def analyze_text(payload: TextAnalyzeRequest) -> JSONResponse:
 @app.post("/api/analyze/vision")
 async def analyze_vision(payload: VisionAnalyzeRequest) -> JSONResponse:
     config = store.load_config()
-    keys = config.get("gemini_keys", [])
+    keys = store.ordered_provider_keys("gemini", config)
     if not keys:
         raise HTTPException(status_code=503, detail="No Gemini API keys configured on the server.")
 
@@ -570,6 +570,31 @@ async def admin_remove_key(
     return RedirectResponse(url="/admin", status_code=303)
 
 
+@app.post("/admin/keys/premium")
+async def admin_set_premium_key(
+    provider: Annotated[str, Form()],
+    key: Annotated[str, Form()],
+    _: Annotated[None, Depends(require_admin)],
+):
+    try:
+        store.set_premium_key(provider, key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return RedirectResponse(url="/admin", status_code=303)
+
+
+@app.post("/admin/keys/premium/clear")
+async def admin_clear_premium_key(
+    provider: Annotated[str, Form()],
+    _: Annotated[None, Depends(require_admin)],
+):
+    try:
+        store.clear_premium_key(provider)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return RedirectResponse(url="/admin", status_code=303)
+
+
 @app.post("/admin/models/add")
 async def admin_add_model(
     provider: Annotated[str, Form()],
@@ -648,7 +673,7 @@ async def admin_toggle_ref_doc(
 async def admin_remove_ref_doc(_: Annotated[None, Depends(require_admin)] = None):
     config = store.load_config()
     meta = ref_doc.load_meta()
-    keys = config.get("gemini_keys", [])
+    keys = store.ordered_provider_keys("gemini", config)
     if meta and keys:
         await delete_explicit_cache(keys[0], meta.get("gemini_cache_name"))
     ref_doc.clear_ref_doc()

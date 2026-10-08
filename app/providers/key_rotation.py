@@ -129,12 +129,11 @@ async def retry_with_rotation_async(
     last_error: Exception | None = None
     failures: list[str] = []
 
-    fresh = [key for key in keys if not _is_key_on_cooldown(key)]
-    cooling = [key for key in keys if _is_key_on_cooldown(key)]
-    ordered = fresh + cooling
-
-    for key in ordered:
+    for index, key in enumerate(keys):
         if len(tried) >= limit or key in tried:
+            continue
+        # Premium (first slot) is always tried; backup keys skip cooldown.
+        if index > 0 and _is_key_on_cooldown(key):
             continue
         tried.add(key)
         try:

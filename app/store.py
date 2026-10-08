@@ -178,8 +178,16 @@ def admin_config() -> dict[str, Any]:
     from app import ref_doc
 
     config = deepcopy(load_config())
-    config["gemini_keys"] = _mask_keys(config.get("gemini_keys", []))
-    config["groq_keys"] = _mask_keys(config.get("groq_keys", []))
+    config["gemini_keys"] = _mask_keys(
+        config.get("gemini_keys", []), str(config.get("gemini_premium_key") or "")
+    )
+    config["groq_keys"] = _mask_keys(
+        config.get("groq_keys", []), str(config.get("groq_premium_key") or "")
+    )
+    config["gemini_premium_preview"] = _premium_preview(config, "gemini")
+    config["groq_premium_preview"] = _premium_preview(config, "groq")
+    config.pop("gemini_premium_key", None)
+    config.pop("groq_premium_key", None)
     config["ref_doc"] = ref_doc.admin_summary()
     config.setdefault(
         "ref_doc_settings",
@@ -194,20 +202,58 @@ def admin_config() -> dict[str, Any]:
     return config
 
 
-def _mask_keys(keys: list[str]) -> list[dict[str, str]]:
+def _premium_field(provider: str) -> str:
+    return "gemini_premium_key" if provider == "gemini" else "groq_premium_key"
+
+
+def _keys_field(provider: str) -> str:
+    return "gemini_keys" if provider == "gemini" else "groq_keys"
+
+
+def ordered_provider_keys(provider: str, config: dict[str, Any] | None = None) -> list[str]:
+    """Premium key first (if set), then the rest — rotation only after premium fails."""
+    cfg = config or load_config()
+    pool = list(cfg.get(_keys_field(provider)) or [])
+    premium = str(cfg.get(_premium_field(provider)) or "").strip()
+    if not premium:
+        return pool
+    rest = [key for key in pool if key != premium]
+    if premium not in pool:
+        return [premium, *rest]
+    return [premium, *rest]
+
+
+def _mask_keys(keys: list[str], premium_key: str = "") -> list[dict[str, str | bool | int]]:
+    premium_key = (premium_key or "").strip()
     masked = []
     for index, key in enumerate(keys):
         suffix = key[-4:] if len(key) >= 4 else "****"
-        masked.append({"index": index, "preview": f"****{suffix}"})
+        masked.append(
+            {
+                "index": index,
+                "preview": f"****{suffix}",
+                "is_premium": bool(premium_key and key == premium_key),
+            }
+        )
     return masked
+
+
+def _premium_preview(config: dict[str, Any], provider: str) -> str | None:
+    premium = str(config.get(_premium_field(provider)) or "").strip()
+    if not premium:
+        return None
+    suffix = premium[-4:] if len(premium) >= 4 else "****"
+    return f"****{suffix}"
 
 
 def add_key(provider: str, key: str) -> None:
     key = key.strip()
     if not key:
         raise ValueError("API key cannot be empty.")
+    if provider not in {"gemini", "groq"}:
+        raise ValueError("Invalid provider.")
 
-    field = "gemini_keys" if provider == "gemini" else "groq_keys"
+    field = _keys_field(provider)
     config = load_config()
     keys = config.setdefault(field, [])
     if key in keys:
@@ -216,13 +262,41 @@ def add_key(provider: str, key: str) -> None:
     save_config(config)
 
 
+def set_premium_key(provider: str, key: str) -> None:
+    key = key.strip()
+    if not key:
+        raise ValueError("API key cannot be empty.")
+    if provider not in {"gemini", "groq"}:
+        raise ValueError("Invalid provider.")
+
+    field = _keys_field(provider)
+    premium_field = _premium_field(provider)
+    config = load_config()
+    keys = config.setdefault(field, [])
+    if key not in keys:
+        keys.append(key)
+    config[premium_field] = key
+    save_config(config)
+
+
+def clear_premium_key(provider: str) -> None:
+    if provider not in {"gemini", "groq"}:
+        raise ValueError("Invalid provider.")
+    config = load_config()
+    config[_premium_field(provider)] = ""
+    save_config(config)
+
+
 def remove_key(provider: str, index: int) -> None:
-    field = "gemini_keys" if provider == "gemini" else "groq_keys"
+    field = _keys_field(provider)
+    premium_field = _premium_field(provider)
     config = load_config()
     keys = config.setdefault(field, [])
     if index < 0 or index >= len(keys):
         raise ValueError("Invalid key index.")
-    keys.pop(index)
+    removed = keys.pop(index)
+    if str(config.get(premium_field) or "").strip() == removed:
+        config[premium_field] = ""
     save_config(config)
 
 
