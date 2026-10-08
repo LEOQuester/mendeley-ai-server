@@ -97,7 +97,7 @@ async def request_groq_text(
     text = (data.get("choices") or [{}])[0].get("message", {}).get("content")
     if not text:
         raise ProviderError("Empty response from Groq")
-    parsed = parse_ai_response(text)
+    parsed = parse_ai_response(text, default_type=text_mode)
     if allow_retry and _is_image_refusal_text(parsed.get("answer", "")):
         return await request_groq_text(
             api_key, model, question_text, text_mode, allow_retry=False, ref_excerpt=ref_excerpt, session=session

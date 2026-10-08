@@ -111,9 +111,10 @@ def normalize_source_response(result: dict[str, str]) -> dict[str, str]:
     return result
 
 
-def parse_ai_response(raw: str) -> dict[str, str]:
+def parse_ai_response(raw: str, *, default_type: str = "mcq") -> dict[str, str]:
+    fallback_type = "descriptive" if default_type == "descriptive" else "mcq"
     if not raw:
-        return {"type": "mcq", "answer": "No response text received."}
+        return {"type": fallback_type, "answer": "No response text received."}
 
     try:
         parsed = json.loads(extract_json_text(raw))
@@ -158,6 +159,8 @@ def parse_ai_response(raw: str) -> dict[str, str]:
 
     clean_text = unwrap_answer_value(re.sub(r"```[\s\S]*?```", "", raw))
     if clean_text and not re.match(r'^[\s{["]*type\b', clean_text, re.IGNORECASE):
-        return normalize_source_response({"type": "mcq", "answer": clean_text[:500], "source": "document"})
+        return normalize_source_response(
+            {"type": fallback_type, "answer": clean_text[:500], "source": "document"}
+        )
 
     raise ValueError("Could not parse answer from response.")

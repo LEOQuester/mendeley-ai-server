@@ -263,7 +263,7 @@ async def request_gemini_text(
         if str(reason).upper() == "MAX_TOKENS":
             raise ProviderError("Gemini ran out of output tokens while answering.")
         raise ProviderError("Empty response from Gemini")
-    return parse_ai_response(text)
+    return parse_ai_response(text, default_type=text_mode)
 
 
 async def call_gemini_text(

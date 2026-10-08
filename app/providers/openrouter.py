@@ -68,7 +68,7 @@ async def request_openrouter_text(
     text = (data.get("choices") or [{}])[0].get("message", {}).get("content")
     if not text:
         raise ProviderError("Empty response from OpenRouter")
-    return parse_ai_response(text)
+    return parse_ai_response(text, default_type=text_mode)
 
 
 async def call_openrouter_text(
@@ -133,7 +133,7 @@ async def request_openrouter_vision(
     if not text:
         raise ProviderError("Empty response from OpenRouter Vision")
     try:
-        return parse_ai_response(text)
+        return parse_ai_response(text, default_type="mcq")
     except ValueError:
         return {"type": "mcq", "answer": text[:500]}
 
