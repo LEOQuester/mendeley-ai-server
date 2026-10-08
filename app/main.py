@@ -277,7 +277,7 @@ async def health() -> dict[str, Any]:
         if err:
             payload["mysql_error"] = err[:400]
         payload["mysql_host"] = os.getenv("MYSQL_HOST", "").strip() or "primeict.lk"
-        payload["mysql_database"] = os.getenv("MYSQL_DATABASE", "").strip() or "primeic1_mcq_tool"
+        payload["mysql_database"] = os.getenv("MYSQL_DATABASE", "").strip() or "primeic1_mqc_tool"
     return payload
 
 

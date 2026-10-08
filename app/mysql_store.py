@@ -20,7 +20,7 @@ MYSQL_PORT_DEFAULT = 3306
 MYSQL_USER_DEFAULT = "primeic1_mcq_tool_user"
 MYSQL_PASSWORD_DEFAULT = "Mcqtooluser123!@"
 # cPanel DB name usually matches account prefix (primeic1_*), not primeict.lk hostname spelling.
-MYSQL_DATABASE_DEFAULT = "primeic1_mcq_tool"
+MYSQL_DATABASE_DEFAULT = "primeic1_mqc_tool"
 
 CONFIG_META_KEY = "config_meta"
 _lock = threading.Lock()
