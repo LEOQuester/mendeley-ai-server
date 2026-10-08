@@ -762,12 +762,12 @@ async def admin_ref_doc_settings(
 
 @app.post("/admin/defaults")
 async def admin_update_defaults(
+    _: Annotated[None, Depends(require_admin)],
     gemini_text: Annotated[str, Form()],
     gemini_vision: Annotated[str, Form()],
     groq_text: Annotated[str, Form()],
-    openrouter_text: Annotated[str, Form()] = "",
-    openrouter_vision: Annotated[str, Form()] = "",
-    _: Annotated[None, Depends(require_admin)],
+    openrouter_text: Annotated[str, Form()],
+    openrouter_vision: Annotated[str, Form()],
 ):
     store.update_defaults(
         {
