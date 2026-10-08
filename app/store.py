@@ -76,23 +76,29 @@ def init_db() -> None:
         mysql_store.set_mysql_active(False)
         return
     try:
-        mysql_store.init_schema()
-        if not mysql_store.ping():
-            raise RuntimeError("MySQL ping failed.")
-        mysql_store.set_mysql_active(True)
+        mysql_store.bootstrap()
         logger.info("MySQL storage active.")
-        try:
-            file_config = _load_file_config() if CONFIG_PATH.exists() else _default_config()
-            mysql_store.migrate_from_file_config(file_config)
-        except Exception as exc:
-            logger.warning("MySQL key migration from file skipped: %s", exc)
+        default_meta = _config_meta_only(_default_config())
+        file_config: dict[str, Any] | None = None
+        if CONFIG_PATH.exists():
+            try:
+                with CONFIG_PATH.open(encoding="utf-8") as handle:
+                    file_config = json.load(handle)
+            except (json.JSONDecodeError, OSError) as exc:
+                logger.warning("Could not read config.json for MySQL import: %s", exc)
+        mysql_store.migrate_from_file_config(file_config or _default_config(), default_meta)
     except Exception as exc:
         mysql_store.set_mysql_active(False)
+        mysql_store.record_mysql_error(str(exc))
         logger.error(
-            "MySQL unavailable (%s). Falling back to file config — fix DB name/grants in cPanel or app/mysql_store.py.",
+            "MySQL unavailable (%s). Falling back to ephemeral file config — enable remote MySQL for Railway IP in cPanel.",
             exc,
         )
         ensure_config()
+
+
+def mysql_storage_active() -> bool:
+    return mysql_store.mysql_enabled()
 
 
 def ensure_config() -> None:
@@ -199,6 +205,7 @@ def admin_config() -> dict[str, Any]:
         },
     )
     config["storage_backend"] = "mysql" if mysql_store.mysql_enabled() else "file"
+    config["mysql_error"] = mysql_store.last_mysql_error()
     return config
 
 

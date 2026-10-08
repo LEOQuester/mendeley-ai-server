@@ -178,6 +178,21 @@ button {
   margin: 0 0 12px;
 }
 
+.storage-warning {
+  border-color: #fecdca;
+  background: #fff5f5;
+}
+
+.storage-warning h2 {
+  color: var(--danger);
+}
+
+.storage-ok {
+  font-size: 13px;
+  color: #027a48;
+  margin: 0 0 16px;
+}
+
 .model-list code {
   display: block;
   margin-top: 4px;

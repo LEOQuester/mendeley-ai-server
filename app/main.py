@@ -179,8 +179,9 @@ async def _refresh_gemini_cache(config: dict, model: str) -> None:
 
 @app.on_event("startup")
 def startup() -> None:
-    store.ensure_config()
     store.init_db()
+    if not store.mysql_storage_active():
+        store.ensure_config()
     request_log.init_from_disk()
 
 
@@ -270,6 +271,13 @@ async def health() -> dict[str, Any]:
         except Exception as exc:
             payload["mysql_ok"] = False
             payload["mysql_error"] = str(exc)[:200]
+    else:
+        payload["mysql_ok"] = False
+        err = mysql_store.last_mysql_error()
+        if err:
+            payload["mysql_error"] = err[:400]
+        payload["mysql_host"] = os.getenv("MYSQL_HOST", "").strip() or "primeict.lk"
+        payload["mysql_database"] = os.getenv("MYSQL_DATABASE", "").strip() or "primeic1_mcq_tool"
     return payload
 
 

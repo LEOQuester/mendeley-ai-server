@@ -37,6 +37,22 @@
     </section>
     {% else %}
 
+    {% if config.storage_backend != 'mysql' %}
+    <section class="card storage-warning">
+      <h2>Storage: file only (keys reset on redeploy)</h2>
+      <p class="hint-block">
+        MySQL is not connected, so API keys and admin defaults live on the server disk and are lost when Railway redeploys.
+        Fix MySQL in cPanel (user assigned to database with ALL PRIVILEGES, remote MySQL allowed for Railway), then redeploy.
+        Check <code>/health</code> for <code>mysql_error</code>, <code>mysql_host</code>, and <code>mysql_database</code>.
+      </p>
+      {% if config.mysql_error %}
+      <p><strong>Last MySQL error:</strong> <code>{{ config.mysql_error }}</code></p>
+      {% endif %}
+    </section>
+    {% else %}
+    <p class="storage-ok">Storage: MySQL — keys and settings persist across deploys.</p>
+    {% endif %}
+
     <section class="card ref-doc-card">
       <h2>Reference Document</h2>
       <p class="hint-block">

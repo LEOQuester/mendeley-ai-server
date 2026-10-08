@@ -25,6 +25,7 @@ MYSQL_DATABASE_DEFAULT = "primeic1_mcq_tool"
 CONFIG_META_KEY = "config_meta"
 _lock = threading.Lock()
 _mysql_active = False
+_mysql_last_error: str | None = None
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS api_keys (
@@ -53,6 +54,18 @@ def _db_setting(name: str, default: str | int) -> str:
 def set_mysql_active(active: bool) -> None:
     global _mysql_active
     _mysql_active = active
+    if active:
+        global _mysql_last_error
+        _mysql_last_error = None
+
+
+def last_mysql_error() -> str | None:
+    return _mysql_last_error
+
+
+def record_mysql_error(message: str) -> None:
+    global _mysql_last_error
+    _mysql_last_error = message
 
 
 def mysql_enabled() -> bool:
@@ -94,9 +107,17 @@ def _connection() -> Iterator[pymysql.connections.Connection]:
         conn.close()
 
 
+def test_connection() -> None:
+    """Connect and ping — does not require mysql_enabled."""
+    with _connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 AS ok")
+            row = cur.fetchone()
+            if not row or row.get("ok") != 1:
+                raise RuntimeError("MySQL SELECT 1 failed.")
+
+
 def init_schema() -> None:
-    if not mysql_enabled():
-        return
     with _connection() as conn:
         with conn.cursor() as cur:
             for statement in _SCHEMA_SQL.strip().split(";"):
@@ -104,6 +125,16 @@ def init_schema() -> None:
                 if stmt:
                     cur.execute(stmt)
     logger.info("MySQL schema ready (%s)", _db_setting("MYSQL_DATABASE", MYSQL_DATABASE_DEFAULT))
+
+
+def has_config_meta_row() -> bool:
+    with _connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM app_settings WHERE setting_key = %s LIMIT 1",
+                (CONFIG_META_KEY,),
+            )
+            return cur.fetchone() is not None
 
 
 def _load_keys(provider: str) -> list[str]:
@@ -147,6 +178,29 @@ def load_keys() -> tuple[list[str], list[str]]:
         return _load_keys("gemini"), _load_keys("groq")
 
 
+def _merge_config_meta(default_meta: dict[str, Any], stored: dict[str, Any]) -> dict[str, Any]:
+    """Stored admin settings win; missing model lists / defaults fall back to shipped defaults."""
+    from copy import deepcopy
+
+    merged = deepcopy(default_meta)
+    list_fields = ("gemini_text_models", "gemini_vision_models", "groq_text_models")
+    for key, value in stored.items():
+        if key in list_fields:
+            if isinstance(value, list) and value:
+                merged[key] = value
+        elif key == "defaults" and isinstance(value, dict):
+            merged.setdefault("defaults", {})
+            for dk, dv in value.items():
+                if dv:
+                    merged["defaults"][dk] = dv
+        elif key == "ref_doc_settings" and isinstance(value, dict):
+            merged.setdefault("ref_doc_settings", {})
+            merged["ref_doc_settings"].update(value)
+        elif value not in (None, ""):
+            merged[key] = value
+    return merged
+
+
 def load_config_meta(default_meta: dict[str, Any]) -> dict[str, Any]:
     with _connection() as conn:
         with conn.cursor() as cur:
@@ -156,14 +210,20 @@ def load_config_meta(default_meta: dict[str, Any]) -> dict[str, Any]:
             )
             row = cur.fetchone()
     if not row:
-        return default_meta
+        return deepcopy_meta(default_meta)
     try:
         parsed = json.loads(row["setting_value"])
         if isinstance(parsed, dict):
-            return parsed
+            return _merge_config_meta(default_meta, parsed)
     except (json.JSONDecodeError, TypeError):
         pass
-    return default_meta
+    return deepcopy_meta(default_meta)
+
+
+def deepcopy_meta(meta: dict[str, Any]) -> dict[str, Any]:
+    from copy import deepcopy
+
+    return deepcopy(meta)
 
 
 def save_config_meta(meta: dict[str, Any]) -> None:
@@ -180,36 +240,49 @@ def save_config_meta(meta: dict[str, Any]) -> None:
             )
 
 
-def migrate_from_file_config(file_config: dict[str, Any]) -> None:
-    """One-time import when DB is empty but local config.json has data."""
+def seed_config_meta(default_meta: dict[str, Any], file_config: dict[str, Any] | None = None) -> None:
+    """Persist defaults (and optional file config) when app_settings has no config_meta row."""
+    if has_config_meta_row():
+        return
+    file_meta: dict[str, Any] = {}
+    if file_config:
+        file_meta = {k: v for k, v in file_config.items() if k not in ("gemini_keys", "groq_keys")}
+    payload = _merge_config_meta(default_meta, file_meta)
+    save_config_meta(payload)
+    logger.info("Seeded MySQL config_meta (models, defaults, ref-doc settings).")
+
+
+def migrate_from_file_config(file_config: dict[str, Any], default_meta: dict[str, Any]) -> None:
+    """Import keys/meta from local config.json when MySQL rows are still empty."""
     if not mysql_enabled():
         return
+
     gemini, groq = load_keys()
-    if gemini or groq:
-        return
+    file_gemini = list(file_config.get("gemini_keys") or [])
+    file_groq = list(file_config.get("groq_keys") or [])
 
-    file_gemini = file_config.get("gemini_keys") or []
-    file_groq = file_config.get("groq_keys") or []
-    if not file_gemini and not file_groq:
-        return
+    if not gemini and not groq and (file_gemini or file_groq):
+        save_keys(file_gemini, file_groq)
+        logger.info(
+            "Imported API keys from file into MySQL (gemini=%s, groq=%s)",
+            len(file_gemini),
+            len(file_groq),
+        )
 
-    save_keys(list(file_gemini), list(file_groq))
-    logger.info(
-        "Imported API keys from file into MySQL (gemini=%s, groq=%s)",
-        len(file_gemini),
-        len(file_groq),
-    )
-
-    meta = {k: v for k, v in file_config.items() if k not in ("gemini_keys", "groq_keys")}
-    if meta:
-        save_config_meta(meta)
+    seed_config_meta(default_meta, file_config)
 
 
 def ping() -> bool:
-    if not mysql_enabled():
+    try:
+        test_connection()
+        return True
+    except Exception as exc:
+        logger.debug("MySQL ping failed: %s", exc)
         return False
-    with _connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1 AS ok")
-            row = cur.fetchone()
-    return bool(row and row.get("ok") == 1)
+
+
+def bootstrap() -> None:
+    """Connect, create tables, mark storage active. Raises on failure."""
+    test_connection()
+    set_mysql_active(True)
+    init_schema()
