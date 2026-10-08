@@ -19,10 +19,12 @@ MYSQL_HOST_DEFAULT = "primeict.lk"
 MYSQL_PORT_DEFAULT = 3306
 MYSQL_USER_DEFAULT = "primeic1_mcq_tool_user"
 MYSQL_PASSWORD_DEFAULT = "Mcqtooluser123!@"
-MYSQL_DATABASE_DEFAULT = "primeict1_mcq_tool"
+# cPanel DB name usually matches account prefix (primeic1_*), not primeict.lk hostname spelling.
+MYSQL_DATABASE_DEFAULT = "primeic1_mcq_tool"
 
 CONFIG_META_KEY = "config_meta"
 _lock = threading.Lock()
+_mysql_active = False
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS api_keys (
@@ -48,7 +50,18 @@ def _db_setting(name: str, default: str | int) -> str:
     return str(default)
 
 
+def set_mysql_active(active: bool) -> None:
+    global _mysql_active
+    _mysql_active = active
+
+
 def mysql_enabled() -> bool:
+    """True when MySQL connected successfully at startup (or env forces retry via is_active only after init)."""
+    return _mysql_active
+
+
+def mysql_configured() -> bool:
+    """App is built to use MySQL defaults; startup may fall back to file storage if connect fails."""
     return True
 
 

@@ -259,6 +259,7 @@ async def health() -> dict[str, Any]:
     payload: dict[str, Any] = {
         "status": "ok",
         "storage_backend": "mysql" if mysql_store.mysql_enabled() else "file",
+        "mysql_configured": mysql_store.mysql_configured(),
         "analyze_log_entries": request_log.entry_count(),
         "analyze_log_latest_utc": request_log.latest_timestamp(),
         **request_log.debug_info(),

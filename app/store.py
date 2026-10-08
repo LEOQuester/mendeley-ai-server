@@ -72,21 +72,32 @@ def _load_file_config() -> dict[str, Any]:
 
 
 def init_db() -> None:
-    if not mysql_store.mysql_enabled():
+    if not mysql_store.mysql_configured():
+        mysql_store.set_mysql_active(False)
         return
-    mysql_store.init_schema()
-    if not mysql_store.ping():
-        raise RuntimeError("MySQL connection failed. Check host firewall and credentials in app/mysql_store.py.")
     try:
-        file_config = _load_file_config() if CONFIG_PATH.exists() else _default_config()
-        mysql_store.migrate_from_file_config(file_config)
+        mysql_store.init_schema()
+        if not mysql_store.ping():
+            raise RuntimeError("MySQL ping failed.")
+        mysql_store.set_mysql_active(True)
+        logger.info("MySQL storage active.")
+        try:
+            file_config = _load_file_config() if CONFIG_PATH.exists() else _default_config()
+            mysql_store.migrate_from_file_config(file_config)
+        except Exception as exc:
+            logger.warning("MySQL key migration from file skipped: %s", exc)
     except Exception as exc:
-        logger.warning("MySQL key migration from file skipped: %s", exc)
+        mysql_store.set_mysql_active(False)
+        logger.error(
+            "MySQL unavailable (%s). Falling back to file config — fix DB name/grants in cPanel or app/mysql_store.py.",
+            exc,
+        )
+        ensure_config()
 
 
 def ensure_config() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    if mysql_store.mysql_enabled():
+    if mysql_store.mysql_enabled() and mysql_store.mysql_configured():
         return
     if CONFIG_PATH.exists():
         return
