@@ -15,11 +15,34 @@ from app.prompts import (
     TEXT_RESPONSE_SCHEMA,
     VISION_SYSTEM_PROMPT,
 )
-from app.providers.key_rotation import retry_with_rotation_async
+from app.providers.key_rotation import is_invalid_key_error, retry_with_rotation_async
 from app.providers.response_parser import parse_ai_response
 
 TEXT_FETCH_TIMEOUT = 60.0
 VISION_FETCH_TIMEOUT = 60.0
+
+_gemini_http_client: httpx.AsyncClient | None = None
+
+
+def _gemini_http_timeout() -> httpx.Timeout:
+    return httpx.Timeout(max(TEXT_FETCH_TIMEOUT, VISION_FETCH_TIMEOUT))
+
+
+async def _get_gemini_http_client() -> httpx.AsyncClient:
+    global _gemini_http_client
+    if _gemini_http_client is None or _gemini_http_client.is_closed:
+        _gemini_http_client = httpx.AsyncClient(
+            timeout=_gemini_http_timeout(),
+            limits=httpx.Limits(max_keepalive_connections=8, max_connections=16),
+        )
+    return _gemini_http_client
+
+
+async def close_gemini_http_client() -> None:
+    global _gemini_http_client
+    if _gemini_http_client is not None and not _gemini_http_client.is_closed:
+        await _gemini_http_client.aclose()
+    _gemini_http_client = None
 
 GEMINI_TEXT_OVERLOAD_FALLBACKS = [
     "gemini-3.7-flash",
@@ -121,19 +144,28 @@ def _is_rate_limit_error(message: str, status: int | None) -> bool:
 
 def _is_vision_retryable_error(message: str, status: int | None) -> bool:
     msg = message.lower()
-    if any(token in msg for token in ("api key", "not valid", "expired", "unauthorized")):
+    if is_invalid_key_error(message, status):
         return False
+    if "all api key(s) failed" in msg or "all " in msg and "api key(s) failed" in msg:
+        return _is_gemini_overload_error(message, status) or _is_rate_limit_error(message, status)
     return (
         _is_gemini_overload_error(message, status)
         or _is_rate_limit_error(message, status)
-        or status == 400
         or "empty response from gemini vision" in msg
     )
 
 
+def _should_try_next_gemini_text_model(exc: Exception) -> bool:
+    message = str(exc)
+    status = getattr(exc, "status", None)
+    if is_invalid_key_error(message, status):
+        return False
+    return _is_gemini_overload_error(message, status) or _is_rate_limit_error(message, status)
+
+
 def _build_gemini_vision_generation_config(model_id: str, use_schema: bool) -> dict[str, Any]:
     config: dict[str, Any] = {
-        "maxOutputTokens": 4096,
+        "maxOutputTokens": 512,
         "thinkingConfig": {"thinkingLevel": _gemini_vision_thinking_level(model_id)},
     }
     if use_schema:
@@ -180,8 +212,13 @@ def _build_gemini_vision_request_body(
 
 async def _post_gemini(model: str, api_key: str, body: dict[str, Any], timeout: float) -> dict[str, Any]:
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.post(url, json=body, headers={"Content-Type": "application/json"})
+    client = await _get_gemini_http_client()
+    response = await client.post(
+        url,
+        json=body,
+        headers={"Content-Type": "application/json"},
+        timeout=timeout,
+    )
     if not response.is_success:
         _raise_http_error("Gemini API error", response.status_code, response.text)
     return response.json()
@@ -247,6 +284,7 @@ async def call_gemini_text(
                     lambda key, current=current_model: request_gemini_text(
                         key, current, question_text, text_mode, ref_excerpt, session
                     ),
+                    provider_label="Gemini",
                 )
                 if session_id:
                     chat_sessions.append_turn(session_id, question_text, json.dumps(result))
@@ -255,7 +293,7 @@ async def call_gemini_text(
                 last_error = exc
                 message = str(exc)
                 status = getattr(exc, "status", None)
-                if not (_is_gemini_overload_error(message, status) or _is_rate_limit_error(message, status)):
+                if not _should_try_next_gemini_text_model(exc):
                     raise
                 if attempt == 0 and _is_gemini_overload_error(message, status):
                     await asyncio.sleep(0.4)
@@ -307,14 +345,20 @@ async def request_gemini_vision(
     raise last_error or ProviderError("Gemini Vision failed.")
 
 
+def _should_try_next_gemini_vision_model(exc: Exception) -> bool:
+    message = str(exc)
+    status = getattr(exc, "status", None)
+    if is_invalid_key_error(message, status):
+        return False
+    return _is_gemini_overload_error(message, status) or _is_rate_limit_error(message, status)
+
+
 async def call_gemini_vision(
     keys: list[str],
     model: str,
     base64_image: str,
     mime_type: str,
     ref_excerpt: str = "",
-    session_id: str | None = None,
-    session: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     preferred = ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash"]
     models = [model] + [item for item in preferred if item != model][:2]
@@ -322,21 +366,16 @@ async def call_gemini_vision(
 
     for current_model in models:
         try:
-            result = await retry_with_rotation_async(
+            return await retry_with_rotation_async(
                 keys,
                 lambda key, current=current_model: request_gemini_vision(
                     key, current, base64_image, mime_type, ref_excerpt
                 ),
-                max_keys=3,
+                provider_label="Gemini",
             )
-            if session_id:
-                chat_sessions.append_turn(session_id, "[vision screenshot]", json.dumps(result))
-            return result
         except Exception as exc:
             last_error = exc
-            message = str(exc)
-            status = getattr(exc, "status", None)
-            if not _is_vision_retryable_error(message, status):
+            if not _should_try_next_gemini_vision_model(exc):
                 raise
 
     raise last_error or ProviderError("Gemini Vision failed.")

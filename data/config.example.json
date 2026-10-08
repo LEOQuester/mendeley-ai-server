@@ -22,7 +22,7 @@
     { "id": "openai/gpt-oss-20b", "label": "GPT-OSS 20B" }
   ],
   "defaults": {
-    "gemini_text": "gemini-3.1-pro-preview",
+    "gemini_text": "gemini-3.1-flash-lite",
     "gemini_vision": "gemini-3.7-flash",
     "groq_text": "openai/gpt-oss-120b"
   },

@@ -5,7 +5,7 @@ FastAPI backend for the Web Importer for Mendeley extension. Hosts API keys, mod
 ## Features
 
 - Text and vision analysis endpoints for the extension
-- API key pool with automatic rotation on rate limits
+- API key pool with automatic rotation on rate limits, overload, or invalid keys (tries every configured key for the selected provider before failing)
 - **Reference document upload** with smart chunk retrieval (free-tier safe)
 - Gemini implicit/explicit context caching when available
 - Admin web UI at `/admin` for keys, models, ref docs, and defaults
@@ -92,11 +92,13 @@ Returns model lists and defaults for the extension.
   "provider": "gemini",
   "question_text": "Q: ...",
   "mode": "auto",
-  "model": "gemini-3.1-pro-preview"
+  "model": "gemini-3.1-flash-lite"
 }
 ```
 
 ### `POST /api/analyze/vision`
+
+Screenshot MCQ analysis (Gemini vision only). Stateless on the server: no chat-session history or ref-doc excerpt inject (no question text to match). Reuses a shared HTTP client to Gemini; vision retries focus on rate limits/overload, not generic 400s.
 
 ```json
 {

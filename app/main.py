@@ -183,6 +183,11 @@ def startup() -> None:
     request_log.init_from_disk()
 
 
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    await gemini.close_gemini_http_client()
+
+
 def _parse_analyze_request_body(body_bytes: bytes) -> dict[str, Any]:
     try:
         data = json.loads(body_bytes.decode("utf-8"))
@@ -301,7 +306,7 @@ async def analyze_text(payload: TextAnalyzeRequest) -> JSONResponse:
             model = _normalize_model(
                 payload.model,
                 config.get("gemini_text_models", []),
-                config.get("defaults", {}).get("gemini_text", "gemini-3.1-pro-preview"),
+                config.get("defaults", {}).get("gemini_text", "gemini-3.1-flash-lite"),
             )
             if not keys:
                 raise HTTPException(status_code=503, detail="No Gemini API keys configured on the server.")
@@ -341,16 +346,14 @@ async def analyze_vision(payload: VisionAnalyzeRequest) -> JSONResponse:
     )
 
     try:
-        session_id, session = chat_sessions.get_or_create_session(payload.session_id, model)
         ref_context = resolve_ref_inject("gemini", "", config, vision=True)
         result = await gemini.call_gemini_vision(
             keys, model, payload.image_base64, payload.mime_type, ref_context,
-            session_id=session_id, session=session,
         )
         return JSONResponse(
             {
                 **result,
-                "session_id": session_id,
+                "session_id": payload.session_id,
                 "ref_mode": _ref_mode("gemini", model, ref_context),
             }
         )
@@ -375,7 +378,7 @@ async def test_key(payload: TestKeyRequest) -> JSONResponse:
             text_model = _normalize_model(
                 payload.model,
                 config.get("gemini_text_models", []),
-                config.get("defaults", {}).get("gemini_text", "gemini-3.1-pro-preview"),
+                config.get("defaults", {}).get("gemini_text", "gemini-3.1-flash-lite"),
             )
             vision_model = _normalize_model(
                 payload.model,
@@ -407,7 +410,7 @@ async def admin_text_ping(
     model_field = "gemini_text_models" if payload.provider == "gemini" else "groq_text_models"
     default_model = config.get("defaults", {}).get(
         "gemini_text" if payload.provider == "gemini" else "groq_text",
-        "gemini-3.1-pro-preview" if payload.provider == "gemini" else "openai/gpt-oss-120b",
+        "gemini-3.1-flash-lite" if payload.provider == "gemini" else "openai/gpt-oss-120b",
     )
 
     keys = config.get(keys_field, [])
@@ -609,7 +612,7 @@ async def admin_upload_ref_doc(
     try:
         chat_sessions.clear_all_sessions()
         config = store.load_config()
-        model = config.get("defaults", {}).get("gemini_text", "gemini-3.1-pro-preview")
+        model = config.get("defaults", {}).get("gemini_text", "gemini-3.1-flash-lite")
         await _refresh_gemini_cache(config, model)
     except Exception as exc:
         logger.warning("Ref doc saved but cache refresh failed: %s", exc)

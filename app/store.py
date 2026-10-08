@@ -34,7 +34,7 @@ def _default_config() -> dict[str, Any]:
         "gemini_vision_models": [],
         "groq_text_models": [],
         "defaults": {
-            "gemini_text": "gemini-3.1-pro-preview",
+            "gemini_text": "gemini-3.1-flash-lite",
             "gemini_vision": "gemini-3.7-flash",
             "groq_text": "openai/gpt-oss-120b",
         },

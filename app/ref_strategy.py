@@ -26,6 +26,10 @@ def resolve_ref_inject(
     if not meta or not meta.get("enabled"):
         return ""
 
+    # Screenshot vision has no question text — skip ref inject (faster, fewer tokens).
+    if vision and not str(question_text or "").strip():
+        return ""
+
     settings = config.get("ref_doc_settings") or {}
     if provider == "gemini" and not vision and gemini_model and gemini_uses_explicit_cache(gemini_model):
         return ""

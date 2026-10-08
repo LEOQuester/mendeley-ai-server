@@ -6,7 +6,7 @@ import httpx
 
 from app import chat_sessions
 from app.prompts import API_TEST_PROMPT, PING_TEST_PROMPT, SYSTEM_PROMPT_DESCRIPTIVE, SYSTEM_PROMPT_MCQ, TEXT_ONLY_PREAMBLE
-from app.providers.key_rotation import retry_with_rotation_async
+from app.providers.key_rotation import is_rotatable_provider_error, retry_with_rotation_async
 from app.providers.response_parser import parse_ai_response
 
 
@@ -84,11 +84,14 @@ async def request_groq_text(
 
     if not response.is_success:
         detail = _extract_provider_error_message(response.text)
-        if allow_retry and (response.status_code == 400 or _is_image_refusal_text(detail)):
+        status = response.status_code
+        if is_rotatable_provider_error(detail, status):
+            _raise_http_error("Groq text error", status, response.text)
+        if allow_retry and (status == 400 or _is_image_refusal_text(detail)):
             return await request_groq_text(
                 api_key, model, question_text, text_mode, allow_retry=False, ref_excerpt=ref_excerpt, session=session
             )
-        _raise_http_error("Groq text error", response.status_code, response.text)
+        _raise_http_error("Groq text error", status, response.text)
 
     data = response.json()
     text = (data.get("choices") or [{}])[0].get("message", {}).get("content")
@@ -114,6 +117,7 @@ async def call_groq_text(
     result = await retry_with_rotation_async(
         keys,
         lambda key: request_groq_text(key, model, question_text, text_mode, ref_excerpt=ref_excerpt, session=session),
+        provider_label="Groq",
     )
     if session_id:
         chat_sessions.append_turn(session_id, question_text, json.dumps(result))
