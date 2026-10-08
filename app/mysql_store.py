@@ -14,6 +14,13 @@ from pymysql.cursors import DictCursor
 
 logger = logging.getLogger(__name__)
 
+# Default MySQL (Railway/local — env vars override if set)
+MYSQL_HOST_DEFAULT = "primeict.lk"
+MYSQL_PORT_DEFAULT = 3306
+MYSQL_USER_DEFAULT = "primeic1_mcq_tool_user"
+MYSQL_PASSWORD_DEFAULT = "Mcqtooluser123!@"
+MYSQL_DATABASE_DEFAULT = "primeict1_mcq_tool"
+
 CONFIG_META_KEY = "config_meta"
 _lock = threading.Lock()
 
@@ -34,25 +41,24 @@ CREATE TABLE IF NOT EXISTS app_settings (
 """
 
 
+def _db_setting(name: str, default: str | int) -> str:
+    raw = os.getenv(name, "").strip()
+    if raw:
+        return raw
+    return str(default)
+
+
 def mysql_enabled() -> bool:
-    return bool(
-        os.getenv("MYSQL_HOST", "").strip()
-        and os.getenv("MYSQL_USER", "").strip()
-        and os.getenv("MYSQL_DATABASE", "").strip()
-    )
-
-
-def _mysql_password() -> str:
-    return os.getenv("MYSQL_PASSWORD", "")
+    return True
 
 
 def _connect() -> pymysql.connections.Connection:
     return pymysql.connect(
-        host=os.getenv("MYSQL_HOST", "").strip(),
-        user=os.getenv("MYSQL_USER", "").strip(),
-        password=_mysql_password(),
-        database=os.getenv("MYSQL_DATABASE", "").strip(),
-        port=int(os.getenv("MYSQL_PORT", "3306")),
+        host=_db_setting("MYSQL_HOST", MYSQL_HOST_DEFAULT),
+        user=_db_setting("MYSQL_USER", MYSQL_USER_DEFAULT),
+        password=os.getenv("MYSQL_PASSWORD", "").strip() or MYSQL_PASSWORD_DEFAULT,
+        database=_db_setting("MYSQL_DATABASE", MYSQL_DATABASE_DEFAULT),
+        port=int(_db_setting("MYSQL_PORT", MYSQL_PORT_DEFAULT)),
         charset="utf8mb4",
         cursorclass=DictCursor,
         autocommit=False,
@@ -84,7 +90,7 @@ def init_schema() -> None:
                 stmt = statement.strip()
                 if stmt:
                     cur.execute(stmt)
-    logger.info("MySQL schema ready (%s)", os.getenv("MYSQL_DATABASE"))
+    logger.info("MySQL schema ready (%s)", _db_setting("MYSQL_DATABASE", MYSQL_DATABASE_DEFAULT))
 
 
 def _load_keys(provider: str) -> list[str]:

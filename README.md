@@ -73,10 +73,7 @@ In **Admin → Text API ping test**, pick provider, **text model**, and API key,
 1. Create a new Railway service from this folder/repo.
 2. Set environment variables:
    - `ADMIN_PASSWORD` (required)
-   - **MySQL (recommended)** — keys and model lists persist when the app redeploys:
-     - `MYSQL_HOST`, `MYSQL_PORT` (default `3306`), `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE`
-     - On startup the app creates `api_keys` and `app_settings` tables if missing.
-     - `/health` reports `storage_backend: mysql` and `mysql_ok: true` when connected.
+   - **MySQL** — built-in connection in `app/mysql_store.py` (keys persist across redeploys). Optional `MYSQL_*` env vars override defaults. Tables `api_keys` / `app_settings` are created on startup. Check `/health` for `mysql_ok`.
    - Or file mode only: `GEMINI_API_KEYS` / `GROQ_API_KEYS` (comma-separated) plus a Railway **volume** on `MENDELEY_DATA_DIR` so `config.json` is not wiped on deploy.
    - `CORS_ORIGINS=*` or your extension origin
 3. Deploy. Railway uses the `Procfile` start command.

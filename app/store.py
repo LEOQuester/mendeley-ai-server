@@ -76,7 +76,7 @@ def init_db() -> None:
         return
     mysql_store.init_schema()
     if not mysql_store.ping():
-        raise RuntimeError("MySQL is configured but connection failed. Check MYSQL_* env vars.")
+        raise RuntimeError("MySQL connection failed. Check host firewall and credentials in app/mysql_store.py.")
     try:
         file_config = _load_file_config() if CONFIG_PATH.exists() else _default_config()
         mysql_store.migrate_from_file_config(file_config)
