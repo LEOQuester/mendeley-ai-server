@@ -180,6 +180,7 @@ async def _refresh_gemini_cache(config: dict, model: str) -> None:
 @app.on_event("startup")
 def startup() -> None:
     store.ensure_config()
+    store.init_db()
     request_log.init_from_disk()
 
 
@@ -253,12 +254,22 @@ async def root():
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
-    return {
+    from app import mysql_store
+
+    payload: dict[str, Any] = {
         "status": "ok",
+        "storage_backend": "mysql" if mysql_store.mysql_enabled() else "file",
         "analyze_log_entries": request_log.entry_count(),
         "analyze_log_latest_utc": request_log.latest_timestamp(),
         **request_log.debug_info(),
     }
+    if mysql_store.mysql_enabled():
+        try:
+            payload["mysql_ok"] = mysql_store.ping()
+        except Exception as exc:
+            payload["mysql_ok"] = False
+            payload["mysql_error"] = str(exc)[:200]
+    return payload
 
 
 @app.get("/api/config")

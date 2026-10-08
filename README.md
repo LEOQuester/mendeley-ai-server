@@ -10,6 +10,7 @@ FastAPI backend for the Web Importer for Mendeley extension. Hosts API keys, mod
 - Gemini implicit/explicit context caching when available
 - Admin web UI at `/admin` for keys, models, ref docs, and defaults
 - Railway-ready deployment
+- Optional **MySQL** storage for API keys and config metadata (persists across redeploys)
 
 ## Reference document architecture (free tier)
 
@@ -72,12 +73,17 @@ In **Admin → Text API ping test**, pick provider, **text model**, and API key,
 1. Create a new Railway service from this folder/repo.
 2. Set environment variables:
    - `ADMIN_PASSWORD` (required)
-   - `GEMINI_API_KEYS` (comma-separated, optional for first boot)
-   - `GROQ_API_KEYS` (comma-separated, optional for first boot)
+   - **MySQL (recommended)** — keys and model lists persist when the app redeploys:
+     - `MYSQL_HOST`, `MYSQL_PORT` (default `3306`), `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE`
+     - On startup the app creates `api_keys` and `app_settings` tables if missing.
+     - `/health` reports `storage_backend: mysql` and `mysql_ok: true` when connected.
+   - Or file mode only: `GEMINI_API_KEYS` / `GROQ_API_KEYS` (comma-separated) plus a Railway **volume** on `MENDELEY_DATA_DIR` so `config.json` is not wiped on deploy.
    - `CORS_ORIGINS=*` or your extension origin
 3. Deploy. Railway uses the `Procfile` start command.
 4. Open `https://your-app.up.railway.app/admin` and add keys/models if needed.
 5. Put the Railway URL into the extension settings as the API server URL.
+
+**Remote MySQL:** allow inbound connections from your host (Railway egress IPs or `%` for testing). Never commit DB passwords to git — set them only in Railway variables.
 
 ## API
 

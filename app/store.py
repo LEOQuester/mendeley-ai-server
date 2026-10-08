@@ -1,11 +1,15 @@
 import json
+import logging
 import os
 import threading
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from app import mysql_store
 from app.data_paths import data_dir
+
+logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = data_dir()
@@ -47,8 +51,43 @@ def _default_config() -> dict[str, Any]:
     }
 
 
+def _config_meta_only(config: dict[str, Any]) -> dict[str, Any]:
+    meta = deepcopy(config)
+    meta.pop("gemini_keys", None)
+    meta.pop("groq_keys", None)
+    return meta
+
+
+def _merge_config(meta: dict[str, Any], gemini_keys: list[str], groq_keys: list[str]) -> dict[str, Any]:
+    merged = deepcopy(meta)
+    merged["gemini_keys"] = list(gemini_keys)
+    merged["groq_keys"] = list(groq_keys)
+    return merged
+
+
+def _load_file_config() -> dict[str, Any]:
+    ensure_config()
+    with CONFIG_PATH.open(encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def init_db() -> None:
+    if not mysql_store.mysql_enabled():
+        return
+    mysql_store.init_schema()
+    if not mysql_store.ping():
+        raise RuntimeError("MySQL is configured but connection failed. Check MYSQL_* env vars.")
+    try:
+        file_config = _load_file_config() if CONFIG_PATH.exists() else _default_config()
+        mysql_store.migrate_from_file_config(file_config)
+    except Exception as exc:
+        logger.warning("MySQL key migration from file skipped: %s", exc)
+
+
 def ensure_config() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if mysql_store.mysql_enabled():
+        return
     if CONFIG_PATH.exists():
         return
 
@@ -65,15 +104,29 @@ def ensure_config() -> None:
 
 
 def load_config() -> dict[str, Any]:
-    ensure_config()
     with _lock:
+        if mysql_store.mysql_enabled():
+            default_meta = _config_meta_only(_default_config())
+            meta = mysql_store.load_config_meta(default_meta)
+            gemini_keys, groq_keys = mysql_store.load_keys()
+            return _merge_config(meta, gemini_keys, groq_keys)
+
+        ensure_config()
         with CONFIG_PATH.open(encoding="utf-8") as handle:
             return json.load(handle)
 
 
 def save_config(config: dict[str, Any]) -> None:
-    ensure_config()
     with _lock:
+        if mysql_store.mysql_enabled():
+            mysql_store.save_keys(
+                list(config.get("gemini_keys") or []),
+                list(config.get("groq_keys") or []),
+            )
+            mysql_store.save_config_meta(_config_meta_only(config))
+            return
+
+        ensure_config()
         with CONFIG_PATH.open("w", encoding="utf-8") as handle:
             json.dump(config, handle, indent=2)
 
@@ -126,6 +179,7 @@ def admin_config() -> dict[str, Any]:
             "implicit_stable_prefix_tokens": 4500,
         },
     )
+    config["storage_backend"] = "mysql" if mysql_store.mysql_enabled() else "file"
     return config
 
 
