@@ -51,17 +51,26 @@ def _default_config() -> dict[str, Any]:
     }
 
 
+_KEY_LIST_FIELDS = ("gemini_keys", "groq_keys", "openrouter_keys")
+
+
 def _config_meta_only(config: dict[str, Any]) -> dict[str, Any]:
     meta = deepcopy(config)
-    meta.pop("gemini_keys", None)
-    meta.pop("groq_keys", None)
+    for field in _KEY_LIST_FIELDS:
+        meta.pop(field, None)
     return meta
 
 
-def _merge_config(meta: dict[str, Any], gemini_keys: list[str], groq_keys: list[str]) -> dict[str, Any]:
+def _merge_config(
+    meta: dict[str, Any],
+    gemini_keys: list[str],
+    groq_keys: list[str],
+    openrouter_keys: list[str],
+) -> dict[str, Any]:
     merged = deepcopy(meta)
     merged["gemini_keys"] = list(gemini_keys)
     merged["groq_keys"] = list(groq_keys)
+    merged["openrouter_keys"] = list(openrouter_keys)
     return merged
 
 
@@ -111,10 +120,13 @@ def ensure_config() -> None:
     config = _default_config()
     gemini_env = _parse_env_keys("GEMINI_API_KEYS")
     groq_env = _parse_env_keys("GROQ_API_KEYS")
+    openrouter_env = _parse_env_keys("OPENROUTER_API_KEYS")
     if gemini_env:
         config["gemini_keys"] = gemini_env
     if groq_env:
         config["groq_keys"] = groq_env
+    if openrouter_env:
+        config["openrouter_keys"] = openrouter_env
 
     with CONFIG_PATH.open("w", encoding="utf-8") as handle:
         json.dump(config, handle, indent=2)
@@ -125,8 +137,8 @@ def load_config() -> dict[str, Any]:
         if mysql_store.mysql_enabled():
             default_meta = _config_meta_only(_default_config())
             meta = mysql_store.load_config_meta(default_meta)
-            gemini_keys, groq_keys = mysql_store.load_keys()
-            return _merge_config(meta, gemini_keys, groq_keys)
+            gemini_keys, groq_keys, openrouter_keys = mysql_store.load_keys()
+            return _merge_config(meta, gemini_keys, groq_keys, openrouter_keys)
 
         ensure_config()
         with CONFIG_PATH.open(encoding="utf-8") as handle:
@@ -139,6 +151,7 @@ def save_config(config: dict[str, Any]) -> None:
             mysql_store.save_keys(
                 list(config.get("gemini_keys") or []),
                 list(config.get("groq_keys") or []),
+                list(config.get("openrouter_keys") or []),
             )
             mysql_store.save_config_meta(_config_meta_only(config))
             return
@@ -154,9 +167,12 @@ def public_config() -> dict[str, Any]:
         "gemini_text_models": config.get("gemini_text_models", []),
         "gemini_vision_models": config.get("gemini_vision_models", []),
         "groq_text_models": config.get("groq_text_models", []),
+        "openrouter_text_models": config.get("openrouter_text_models", []),
+        "openrouter_vision_models": config.get("openrouter_vision_models", []),
         "defaults": config.get("defaults", {}),
         "has_gemini_keys": bool(config.get("gemini_keys")),
         "has_groq_keys": bool(config.get("groq_keys")),
+        "has_openrouter_keys": bool(config.get("openrouter_keys")),
         "ref_doc": _public_ref_doc_summary(),
     }
 
@@ -190,10 +206,15 @@ def admin_config() -> dict[str, Any]:
     config["groq_keys"] = _mask_keys(
         config.get("groq_keys", []), str(config.get("groq_premium_key") or "")
     )
+    config["openrouter_keys"] = _mask_keys(
+        config.get("openrouter_keys", []), str(config.get("openrouter_premium_key") or "")
+    )
     config["gemini_premium_preview"] = _premium_preview(config, "gemini")
     config["groq_premium_preview"] = _premium_preview(config, "groq")
+    config["openrouter_premium_preview"] = _premium_preview(config, "openrouter")
     config.pop("gemini_premium_key", None)
     config.pop("groq_premium_key", None)
+    config.pop("openrouter_premium_key", None)
     config["ref_doc"] = ref_doc.admin_summary()
     config.setdefault(
         "ref_doc_settings",
@@ -209,12 +230,23 @@ def admin_config() -> dict[str, Any]:
     return config
 
 
+_PROVIDERS = frozenset({"gemini", "groq", "openrouter"})
+
+
 def _premium_field(provider: str) -> str:
-    return "gemini_premium_key" if provider == "gemini" else "groq_premium_key"
+    return {
+        "gemini": "gemini_premium_key",
+        "groq": "groq_premium_key",
+        "openrouter": "openrouter_premium_key",
+    }[provider]
 
 
 def _keys_field(provider: str) -> str:
-    return "gemini_keys" if provider == "gemini" else "groq_keys"
+    return {
+        "gemini": "gemini_keys",
+        "groq": "groq_keys",
+        "openrouter": "openrouter_keys",
+    }[provider]
 
 
 def ordered_provider_keys(provider: str, config: dict[str, Any] | None = None) -> list[str]:
@@ -257,7 +289,7 @@ def add_key(provider: str, key: str) -> None:
     key = key.strip()
     if not key:
         raise ValueError("API key cannot be empty.")
-    if provider not in {"gemini", "groq"}:
+    if provider not in _PROVIDERS:
         raise ValueError("Invalid provider.")
 
     field = _keys_field(provider)
@@ -273,7 +305,7 @@ def set_premium_key(provider: str, key: str) -> None:
     key = key.strip()
     if not key:
         raise ValueError("API key cannot be empty.")
-    if provider not in {"gemini", "groq"}:
+    if provider not in _PROVIDERS:
         raise ValueError("Invalid provider.")
 
     field = _keys_field(provider)
@@ -287,7 +319,7 @@ def set_premium_key(provider: str, key: str) -> None:
 
 
 def clear_premium_key(provider: str) -> None:
-    if provider not in {"gemini", "groq"}:
+    if provider not in _PROVIDERS:
         raise ValueError("Invalid provider.")
     config = load_config()
     config[_premium_field(provider)] = ""
@@ -317,6 +349,8 @@ def add_model(provider: str, model_type: str, model_id: str, label: str) -> None
         ("gemini", "text"): "gemini_text_models",
         ("gemini", "vision"): "gemini_vision_models",
         ("groq", "text"): "groq_text_models",
+        ("openrouter", "text"): "openrouter_text_models",
+        ("openrouter", "vision"): "openrouter_vision_models",
     }
     field = field_map.get((provider, model_type))
     if not field:
@@ -335,6 +369,8 @@ def remove_model(provider: str, model_type: str, model_id: str) -> None:
         ("gemini", "text"): "gemini_text_models",
         ("gemini", "vision"): "gemini_vision_models",
         ("groq", "text"): "groq_text_models",
+        ("openrouter", "text"): "openrouter_text_models",
+        ("openrouter", "vision"): "openrouter_vision_models",
     }
     field = field_map.get((provider, model_type))
     if not field:
@@ -349,7 +385,7 @@ def remove_model(provider: str, model_type: str, model_id: str) -> None:
 def update_defaults(defaults: dict[str, str]) -> None:
     config = load_config()
     current = config.setdefault("defaults", {})
-    for key in ("gemini_text", "gemini_vision", "groq_text"):
+    for key in ("gemini_text", "gemini_vision", "groq_text", "openrouter_text", "openrouter_vision"):
         if key in defaults and defaults[key]:
             current[key] = defaults[key]
     save_config(config)

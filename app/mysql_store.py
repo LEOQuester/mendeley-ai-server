@@ -167,15 +167,20 @@ def _save_keys_for_provider(provider: str, keys: list[str]) -> None:
                 )
 
 
-def save_keys(gemini_keys: list[str], groq_keys: list[str]) -> None:
+def save_keys(
+    gemini_keys: list[str],
+    groq_keys: list[str],
+    openrouter_keys: list[str] | None = None,
+) -> None:
     with _lock:
         _save_keys_for_provider("gemini", gemini_keys)
         _save_keys_for_provider("groq", groq_keys)
+        _save_keys_for_provider("openrouter", openrouter_keys or [])
 
 
-def load_keys() -> tuple[list[str], list[str]]:
+def load_keys() -> tuple[list[str], list[str], list[str]]:
     with _lock:
-        return _load_keys("gemini"), _load_keys("groq")
+        return _load_keys("gemini"), _load_keys("groq"), _load_keys("openrouter")
 
 
 def _merge_config_meta(default_meta: dict[str, Any], stored: dict[str, Any]) -> dict[str, Any]:
@@ -183,7 +188,13 @@ def _merge_config_meta(default_meta: dict[str, Any], stored: dict[str, Any]) -> 
     from copy import deepcopy
 
     merged = deepcopy(default_meta)
-    list_fields = ("gemini_text_models", "gemini_vision_models", "groq_text_models")
+    list_fields = (
+        "gemini_text_models",
+        "gemini_vision_models",
+        "groq_text_models",
+        "openrouter_text_models",
+        "openrouter_vision_models",
+    )
     for key, value in stored.items():
         if key in list_fields:
             if isinstance(value, list) and value:
@@ -246,7 +257,11 @@ def seed_config_meta(default_meta: dict[str, Any], file_config: dict[str, Any] |
         return
     file_meta: dict[str, Any] = {}
     if file_config:
-        file_meta = {k: v for k, v in file_config.items() if k not in ("gemini_keys", "groq_keys")}
+        file_meta = {
+            k: v
+            for k, v in file_config.items()
+            if k not in ("gemini_keys", "groq_keys", "openrouter_keys")
+        }
     payload = _merge_config_meta(default_meta, file_meta)
     save_config_meta(payload)
     logger.info("Seeded MySQL config_meta (models, defaults, ref-doc settings).")
@@ -257,16 +272,18 @@ def migrate_from_file_config(file_config: dict[str, Any], default_meta: dict[str
     if not mysql_enabled():
         return
 
-    gemini, groq = load_keys()
+    gemini, groq, openrouter = load_keys()
     file_gemini = list(file_config.get("gemini_keys") or [])
     file_groq = list(file_config.get("groq_keys") or [])
+    file_openrouter = list(file_config.get("openrouter_keys") or [])
 
-    if not gemini and not groq and (file_gemini or file_groq):
-        save_keys(file_gemini, file_groq)
+    if not gemini and not groq and not openrouter and (file_gemini or file_groq or file_openrouter):
+        save_keys(file_gemini, file_groq, file_openrouter)
         logger.info(
-            "Imported API keys from file into MySQL (gemini=%s, groq=%s)",
+            "Imported API keys from file into MySQL (gemini=%s, groq=%s, openrouter=%s)",
             len(file_gemini),
             len(file_groq),
+            len(file_openrouter),
         )
 
     seed_config_meta(default_meta, file_config)

@@ -193,6 +193,43 @@
           <button type="submit" class="btn-primary">Set Groq premium</button>
         </form>
       </article>
+
+      <article class="card">
+        <h2>OpenRouter API Keys</h2>
+        <p class="hint-block">Paid OpenRouter key. Model IDs use OpenRouter slugs (e.g. <code>google/gemini-2.5-flash</code>). Add models in the section below.</p>
+        {% if config.openrouter_premium_preview %}
+        <p class="hint">Premium (always tried first): <strong>{{ config.openrouter_premium_preview }}</strong>
+          <form method="post" action="/admin/keys/premium/clear" class="inline-form">
+            <input type="hidden" name="provider" value="openrouter">
+            <button type="submit" class="btn-secondary">Clear premium</button>
+          </form>
+        </p>
+        {% endif %}
+        <ul class="key-list">
+          {% for key in config.openrouter_keys %}
+          <li>
+            <span>{{ key.preview }}{% if key.is_premium %} <em class="badge">premium</em>{% endif %}</span>
+            <form method="post" action="/admin/keys/remove">
+              <input type="hidden" name="provider" value="openrouter">
+              <input type="hidden" name="index" value="{{ key.index }}">
+              <button type="submit" class="btn-danger">Remove</button>
+            </form>
+          </li>
+          {% else %}
+          <li class="empty">No OpenRouter keys configured.</li>
+          {% endfor %}
+        </ul>
+        <form method="post" action="/admin/keys/add" class="stack inline-form">
+          <input type="hidden" name="provider" value="openrouter">
+          <input type="password" name="key" placeholder="Paste OpenRouter API key" required>
+          <button type="submit" class="btn-primary">Add OpenRouter key</button>
+        </form>
+        <form method="post" action="/admin/keys/premium" class="stack inline-form">
+          <input type="hidden" name="provider" value="openrouter">
+          <input type="password" name="key" placeholder="Set OpenRouter premium key" required>
+          <button type="submit" class="btn-primary">Set OpenRouter premium</button>
+        </form>
+      </article>
     </section>
 
     <section class="card">
@@ -222,6 +259,22 @@
             {% endfor %}
           </select>
         </label>
+        <label>
+          <span>OpenRouter text default</span>
+          <select name="openrouter_text">
+            {% for model in config.openrouter_text_models %}
+            <option value="{{ model.id }}" {% if config.defaults.openrouter_text == model.id %}selected{% endif %}>{{ model.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span>OpenRouter vision default</span>
+          <select name="openrouter_vision">
+            {% for model in config.openrouter_vision_models %}
+            <option value="{{ model.id }}" {% if config.defaults.openrouter_vision == model.id %}selected{% endif %}>{{ model.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
         <button type="submit" class="btn-primary">Save defaults</button>
       </form>
     </section>
@@ -239,6 +292,7 @@
           <select id="ping-provider">
             <option value="gemini">Gemini (text)</option>
             <option value="groq">Groq (text)</option>
+            <option value="openrouter">OpenRouter (text)</option>
           </select>
         </label>
         <label>
@@ -314,6 +368,46 @@
           {% endfor %}
         </ul>
       </article>
+
+      <article class="card">
+        <h2>OpenRouter Text Models</h2>
+        <ul class="model-list">
+          {% for model in config.openrouter_text_models %}
+          <li>
+            <div>
+              <strong>{{ model.label }}</strong>
+              <code>{{ model.id }}</code>
+            </div>
+            <form method="post" action="/admin/models/remove">
+              <input type="hidden" name="provider" value="openrouter">
+              <input type="hidden" name="model_type" value="text">
+              <input type="hidden" name="model_id" value="{{ model.id }}">
+              <button type="submit" class="btn-danger">Remove</button>
+            </form>
+          </li>
+          {% endfor %}
+        </ul>
+      </article>
+
+      <article class="card">
+        <h2>OpenRouter Vision Models</h2>
+        <ul class="model-list">
+          {% for model in config.openrouter_vision_models %}
+          <li>
+            <div>
+              <strong>{{ model.label }}</strong>
+              <code>{{ model.id }}</code>
+            </div>
+            <form method="post" action="/admin/models/remove">
+              <input type="hidden" name="provider" value="openrouter">
+              <input type="hidden" name="model_type" value="vision">
+              <input type="hidden" name="model_id" value="{{ model.id }}">
+              <button type="submit" class="btn-danger">Remove</button>
+            </form>
+          </li>
+          {% endfor %}
+        </ul>
+      </article>
     </section>
 
     <section class="card">
@@ -324,6 +418,7 @@
           <select name="provider" required>
             <option value="gemini">Gemini</option>
             <option value="groq">Groq</option>
+            <option value="openrouter">OpenRouter</option>
           </select>
         </label>
         <label>
@@ -335,7 +430,7 @@
         </label>
         <label>
           <span>Model ID</span>
-          <input type="text" name="model_id" placeholder="gemini-3.7-flash" required>
+          <input type="text" name="model_id" placeholder="google/gemini-2.5-flash or gemini-3.7-flash" required>
         </label>
         <label>
           <span>Label</span>

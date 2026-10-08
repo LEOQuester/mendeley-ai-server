@@ -18,7 +18,7 @@ from app.prompts import PING_EXPECTED_ANSWER
 from app import chat_sessions, ref_doc, request_log, store
 from app.auth import SESSION_COOKIE, create_session_token, require_admin, verify_password
 from app.gemini_cache import delete_explicit_cache, refresh_gemini_cache_for_doc
-from app.providers import gemini, groq
+from app.providers import gemini, groq, openrouter
 from app.ref_strategy import gemini_uses_explicit_cache, resolve_ref_inject
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -78,7 +78,7 @@ app.add_middleware(AnalyzeTextLogMiddleware)
 
 
 class TextAnalyzeRequest(BaseModel):
-    provider: Literal["gemini", "groq"] = "gemini"
+    provider: Literal["gemini", "groq", "openrouter"] = "gemini"
     question_text: str = Field(min_length=1)
     mode: Literal["auto", "mcq", "descriptive"] = "auto"
     model: str | None = None
@@ -86,6 +86,7 @@ class TextAnalyzeRequest(BaseModel):
 
 
 class VisionAnalyzeRequest(BaseModel):
+    provider: Literal["gemini", "openrouter"] = "gemini"
     image_base64: str = Field(min_length=1)
     mime_type: str = "image/jpeg"
     model: str | None = None
@@ -97,13 +98,13 @@ class SessionResetRequest(BaseModel):
 
 
 class TestKeyRequest(BaseModel):
-    provider: Literal["gemini", "groq"]
+    provider: Literal["gemini", "groq", "openrouter"]
     key: str = Field(min_length=1)
     model: str | None = None
 
 
 class AdminTextPingRequest(BaseModel):
-    provider: Literal["gemini", "groq"]
+    provider: Literal["gemini", "groq", "openrouter"]
     model: str = Field(min_length=1)
     key_index: int = Field(default=0, ge=0)
 
@@ -306,7 +307,22 @@ async def analyze_text(payload: TextAnalyzeRequest) -> JSONResponse:
     ref_context = ""
 
     try:
-        if payload.provider == "groq":
+        if payload.provider == "openrouter":
+            keys = store.ordered_provider_keys("openrouter", config)
+            model = _normalize_model(
+                payload.model,
+                config.get("openrouter_text_models", []),
+                config.get("defaults", {}).get("openrouter_text", "google/gemini-2.5-flash"),
+            )
+            if not keys:
+                raise HTTPException(status_code=503, detail="No OpenRouter API keys configured on the server.")
+            session_id, session = chat_sessions.get_or_create_session(payload.session_id, model)
+            ref_context = resolve_ref_inject("openrouter", payload.question_text, config)
+            result = await openrouter.call_openrouter_text(
+                keys, model, payload.question_text, text_mode, ref_context,
+                session_id=session_id, session=session,
+            )
+        elif payload.provider == "groq":
             keys = store.ordered_provider_keys("groq", config)
             model = _normalize_model(
                 payload.model,
@@ -355,28 +371,46 @@ async def analyze_text(payload: TextAnalyzeRequest) -> JSONResponse:
 @app.post("/api/analyze/vision")
 async def analyze_vision(payload: VisionAnalyzeRequest) -> JSONResponse:
     config = store.load_config()
-    keys = store.ordered_provider_keys("gemini", config)
-    if not keys:
-        raise HTTPException(status_code=503, detail="No Gemini API keys configured on the server.")
-
-    model = _normalize_model(
-        payload.model,
-        config.get("gemini_vision_models", []),
-        config.get("defaults", {}).get("gemini_vision", "gemini-3.7-flash"),
-    )
 
     try:
-        ref_context = resolve_ref_inject("gemini", "", config, vision=True)
-        result = await gemini.call_gemini_vision(
-            keys, model, payload.image_base64, payload.mime_type, ref_context,
-        )
+        if payload.provider == "openrouter":
+            keys = store.ordered_provider_keys("openrouter", config)
+            if not keys:
+                raise HTTPException(status_code=503, detail="No OpenRouter API keys configured on the server.")
+            model = _normalize_model(
+                payload.model,
+                config.get("openrouter_vision_models", []),
+                config.get("defaults", {}).get("openrouter_vision", "google/gemini-2.5-flash"),
+            )
+            ref_context = resolve_ref_inject("openrouter", "", config, vision=True)
+            result = await openrouter.call_openrouter_vision(
+                keys, model, payload.image_base64, payload.mime_type, ref_context,
+            )
+            provider_label = "openrouter"
+        else:
+            keys = store.ordered_provider_keys("gemini", config)
+            if not keys:
+                raise HTTPException(status_code=503, detail="No Gemini API keys configured on the server.")
+            model = _normalize_model(
+                payload.model,
+                config.get("gemini_vision_models", []),
+                config.get("defaults", {}).get("gemini_vision", "gemini-3.7-flash"),
+            )
+            ref_context = resolve_ref_inject("gemini", "", config, vision=True)
+            result = await gemini.call_gemini_vision(
+                keys, model, payload.image_base64, payload.mime_type, ref_context,
+            )
+            provider_label = "gemini"
+
         return JSONResponse(
             {
                 **result,
                 "session_id": payload.session_id,
-                "ref_mode": _ref_mode("gemini", model, ref_context),
+                "ref_mode": _ref_mode(provider_label, model, ref_context),
             }
         )
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -408,6 +442,14 @@ async def test_key(payload: TestKeyRequest) -> JSONResponse:
             text_result = await gemini.test_gemini_text_key(payload.key, text_model)
             vision_result = await gemini.test_gemini_vision_key(payload.key, vision_model)
             return JSONResponse({"ok": True, "message": f"{text_result} {vision_result}"})
+        if payload.provider == "openrouter":
+            model = _normalize_model(
+                payload.model,
+                config.get("openrouter_text_models", []),
+                config.get("defaults", {}).get("openrouter_text", "google/gemini-2.5-flash"),
+            )
+            message = await openrouter.test_openrouter_key(payload.key, model)
+            return JSONResponse({"ok": True, "message": message})
         model = _normalize_model(
             payload.model,
             config.get("groq_text_models", []),
@@ -426,12 +468,20 @@ async def admin_text_ping(
 ) -> JSONResponse:
     """Text-only ping (same API path as extension text selection — not vision/screenshot)."""
     config = store.load_config()
-    keys_field = "gemini_keys" if payload.provider == "gemini" else "groq_keys"
-    model_field = "gemini_text_models" if payload.provider == "gemini" else "groq_text_models"
-    default_model = config.get("defaults", {}).get(
-        "gemini_text" if payload.provider == "gemini" else "groq_text",
-        "gemini-3.1-flash-lite" if payload.provider == "gemini" else "openai/gpt-oss-120b",
-    )
+    provider = payload.provider
+    keys_field = {"gemini": "gemini_keys", "groq": "groq_keys", "openrouter": "openrouter_keys"}[provider]
+    model_field = {
+        "gemini": "gemini_text_models",
+        "groq": "groq_text_models",
+        "openrouter": "openrouter_text_models",
+    }[provider]
+    default_key = {"gemini": "gemini_text", "groq": "groq_text", "openrouter": "openrouter_text"}[provider]
+    default_fallback = {
+        "gemini": "gemini-3.1-flash-lite",
+        "groq": "openai/gpt-oss-120b",
+        "openrouter": "google/gemini-2.5-flash",
+    }[provider]
+    default_model = config.get("defaults", {}).get(default_key, default_fallback)
 
     keys = config.get(keys_field, [])
     if not keys:
@@ -447,8 +497,10 @@ async def admin_text_ping(
     key_preview = f"****{api_key[-4:]}" if len(api_key) >= 4 else "****"
 
     try:
-        if payload.provider == "gemini":
+        if provider == "gemini":
             raw = await gemini.ping_gemini_text_key(api_key, model)
+        elif provider == "openrouter":
+            raw = await openrouter.ping_openrouter_text_key(api_key, model)
         else:
             raw = await groq.ping_groq_text_key(api_key, model)
     except Exception as exc:
@@ -495,8 +547,10 @@ async def admin_page(request: Request, session: Annotated[str | None, Cookie(ali
                 {
                     "gemini": store.load_config().get("gemini_text_models", []) if logged_in else [],
                     "groq": store.load_config().get("groq_text_models", []) if logged_in else [],
+                    "openrouter": store.load_config().get("openrouter_text_models", []) if logged_in else [],
                     "gemini_keys": store.admin_config().get("gemini_keys", []) if logged_in else [],
                     "groq_keys": store.admin_config().get("groq_keys", []) if logged_in else [],
+                    "openrouter_keys": store.admin_config().get("openrouter_keys", []) if logged_in else [],
                     "defaults": store.load_config().get("defaults", {}) if logged_in else {},
                 }
             )
@@ -711,6 +765,8 @@ async def admin_update_defaults(
     gemini_text: Annotated[str, Form()],
     gemini_vision: Annotated[str, Form()],
     groq_text: Annotated[str, Form()],
+    openrouter_text: Annotated[str, Form()] = "",
+    openrouter_vision: Annotated[str, Form()] = "",
     _: Annotated[None, Depends(require_admin)],
 ):
     store.update_defaults(
@@ -718,6 +774,8 @@ async def admin_update_defaults(
             "gemini_text": gemini_text,
             "gemini_vision": gemini_vision,
             "groq_text": groq_text,
+            "openrouter_text": openrouter_text,
+            "openrouter_vision": openrouter_vision,
         }
     )
     return RedirectResponse(url="/admin", status_code=303)

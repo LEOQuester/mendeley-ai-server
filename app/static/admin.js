@@ -29,7 +29,11 @@
     const models = catalog[provider] || [];
     const defaults = catalog.defaults || {};
     const preferred =
-      provider === 'gemini' ? defaults.gemini_text : defaults.groq_text;
+      provider === 'gemini'
+        ? defaults.gemini_text
+        : provider === 'openrouter'
+          ? defaults.openrouter_text
+          : defaults.groq_text;
 
     modelSelect.innerHTML = '';
     models.forEach((model) => {

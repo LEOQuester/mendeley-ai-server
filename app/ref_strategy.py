@@ -37,7 +37,7 @@ def resolve_ref_inject(
     if vision:
         max_tokens = settings.get("max_inject_tokens_vision", 1500)
         top_k = settings.get("excerpt_top_k_vision", 3)
-    elif provider == "groq":
+    elif provider in ("groq", "openrouter"):
         max_tokens = settings.get("max_inject_tokens_groq", 1800)
         top_k = settings.get("excerpt_top_k_groq", 3)
     else:

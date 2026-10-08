@@ -1,8 +1,10 @@
 {
   "gemini_keys": [],
   "groq_keys": [],
+  "openrouter_keys": [],
   "gemini_premium_key": "",
   "groq_premium_key": "",
+  "openrouter_premium_key": "",
   "gemini_text_models": [
     { "id": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro" },
     { "id": "gemini-3.7-flash", "label": "Gemini 3.7 Flash" },
@@ -23,10 +25,23 @@
     { "id": "openai/gpt-oss-120b", "label": "GPT-OSS 120B" },
     { "id": "openai/gpt-oss-20b", "label": "GPT-OSS 20B" }
   ],
+  "openrouter_text_models": [
+    { "id": "google/gemini-2.5-flash", "label": "OR · Gemini 2.5 Flash" },
+    { "id": "anthropic/claude-sonnet-4", "label": "OR · Claude Sonnet 4" },
+    { "id": "openai/gpt-4o-mini", "label": "OR · GPT-4o mini" },
+    { "id": "meta-llama/llama-3.3-70b-instruct", "label": "OR · Llama 3.3 70B" }
+  ],
+  "openrouter_vision_models": [
+    { "id": "google/gemini-2.5-flash", "label": "OR · Gemini 2.5 Flash" },
+    { "id": "openai/gpt-4o", "label": "OR · GPT-4o" },
+    { "id": "anthropic/claude-3.5-sonnet", "label": "OR · Claude 3.5 Sonnet" }
+  ],
   "defaults": {
     "gemini_text": "gemini-3.1-flash-lite",
     "gemini_vision": "gemini-3.7-flash",
-    "groq_text": "openai/gpt-oss-120b"
+    "groq_text": "openai/gpt-oss-120b",
+    "openrouter_text": "google/gemini-2.5-flash",
+    "openrouter_vision": "google/gemini-2.5-flash"
   },
   "ref_doc_settings": {
     "max_inject_tokens_gemini": 3500,
